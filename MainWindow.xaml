@@ -1,0 +1,100 @@
+﻿<Window x:Class="HystOSets.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:HystOSets"
+        mc:Ignorable="d"
+        Title="HistOSets" Height="600" Width="1200">
+
+    <Window.Background>
+        <ImageBrush ImageSource="LOGO/GBL.png" Stretch="UniformToFill" Opacity="1" />
+    </Window.Background>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="250"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="250"/>
+        </Grid.ColumnDefinitions>
+
+        <Grid Grid.Column="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="40"/>
+            </Grid.RowDefinitions>
+
+
+
+            <Grid Grid.Row="0">
+                <ListBox x:Name="ListOfSpecimens" Margin="5,5,5,5" FontSize="14" MouseDoubleClick="ListBoxItem_DoubleClick" Background="#FFB8A0E6" >
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock TextWrapping="WrapWithOverflow" Text="{Binding}"  Width="200"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+
+                </ListBox>
+            </Grid>
+
+            <Grid Grid.Row="1">
+                <TextBox x:Name="AboutS"  Margin="5,5,5,5" FontSize="14" TextWrapping="WrapWithOverflow" IsReadOnly="True"/>
+            </Grid>
+
+            <Grid Grid.Row="2">
+                <Button x:Name="SInfo" Content="ABOUT SPECIMEN" Margin="5,5,5,0" FontSize="20" Height="30" VerticalAlignment="Top" Click="SInfo_Click" />
+            </Grid>
+
+        </Grid>
+
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="201*"/>
+                    <RowDefinition Height="91*"/>
+                </Grid.RowDefinitions>
+                <Viewbox Stretch="Uniform" Grid.RowSpan="2">
+                    <Grid x:Name="Desk">
+                        <Image x:Name="Specimen"  Source="LOGO/LOGO2.png" Stretch="Uniform" Grid.ZIndex="2" MouseDown="Image_MouseDown"/>
+                    </Grid>
+                </Viewbox>
+
+
+            </Grid>
+        </Grid>
+
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0">
+                <Button x:Name="EInfo" Content="ABOUT ELEMENT" Margin="5,5,5,5" FontSize="20" Click="EInfo_Click" />
+            </Grid>
+
+
+            <Grid Grid.Row="1">
+                <TextBox x:Name="AboutE" IsReadOnly="True" Margin="5,5,5,5" UndoLimit="95" FontSize="14" TextWrapping="WrapWithOverflow"/>
+            </Grid>
+
+            <Grid Grid.Row="2">
+                <ListBox x:Name="ListOfElements" Margin="5,5,5,5" FontSize="14" MouseDoubleClick="ListBoxItem_DoubleClick2" Background="#FFFFC5F5">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock TextWrapping="WrapWithOverflow" Text="{Binding}"  Width="200"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+
+        </Grid>
+
+    </Grid>
+</Window>
