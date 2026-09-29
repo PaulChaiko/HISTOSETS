@@ -39,7 +39,7 @@ internal static class Program
             var image = (Image)window.FindName("Specimen");
             var canvas = (Canvas)window.FindName("Desk");
             var welcome = (Image)window.FindName("WelcomeLogo");
-            Check(specimens.Items.Count == 10, "Portable XML imports from application directory into SQLite. Status: " + ((TextBlock)window.FindName("StatusText")).Text);
+            Check(specimens.Items.Count == 5, "Portable XML imports from application directory into SQLite. Status: " + ((TextBlock)window.FindName("StatusText")).Text);
             Check(File.Exists(System.IO.Path.Combine(catalogRoot, "catalog.sqlite")), "SQLite database created in the chosen writable directory");
             var legacy = AtlasLoader.Load(AppContext.BaseDirectory);
             Check(specimens.SelectedIndex == -1 && image.Source is null && welcome.Source is not null && welcome.IsVisible,
@@ -47,9 +47,14 @@ internal static class Program
             Check(!((Button)window.FindName("PreviewButton")).IsEnabled, "Preview requires a selected specimen");
             SaveScreenshot(window, System.IO.Path.Combine(output, "native-welcome.png"));
             var regions = 0;
-            foreach (AtlasSpecimen specimen in specimens.Items)
+            var language = (ComboBox)window.FindName("LanguageSelector");
+            foreach (var languageIndex in new[] { 0, 1 })
+            {
+            language.SelectedIndex = languageIndex;
+            foreach (AtlasSpecimen specimen in specimens.Items.Cast<AtlasSpecimen>().ToArray())
             {
                 specimens.SelectedItem = specimen;
+                WaitImage(window);
                 Check(image.Source is not null, "Image: " + specimen.Name);
                 Check(canvas.Children.OfType<Polygon>().Count() == 0, "No stale contours after image switch");
                 foreach (AtlasElement element in elements.Items)
@@ -68,15 +73,33 @@ internal static class Program
                     }
                 }
             }
+            }
             Check(regions == 66, "All 66 baseline polygons rendered");
             specimens.SelectedIndex = -1;
             Check(welcome.IsVisible && image.Source is null && canvas.Children.OfType<Polygon>().Count() == 0,
                 "Clearing selection restores logo without stale image or contours");
             specimens.SelectedIndex = 0;
+            WaitImage(window);
             elements.SelectedIndex = 0;
             Pump();
             Check(!welcome.IsVisible, "Logo does not cover the selected specimen");
             SaveScreenshot(window, System.IO.Path.Combine(output, "native-view.png"));
+            var materialId = ((AtlasSpecimen)specimens.SelectedItem).MaterialId;
+            var elementId = ((AtlasElement)elements.SelectedItem).Id;
+            language.SelectedIndex = 0;
+            WaitImage(window);
+            Check(((AtlasSpecimen)specimens.SelectedItem).MaterialId == materialId && ((AtlasElement)elements.SelectedItem).Id == elementId, "Language switch preserves selected material and element");
+            var search = (TextBox)window.FindName("SearchBox");
+            search.Text = "CORNEA";
+            WaitImage(window);
+            Check(specimens.Items.Count == 2 && specimens.Items.Cast<AtlasSpecimen>().All(s => s.Locale == "ru"), "English search finds Russian material cards");
+            search.Text = "Несуществующий препарат";
+            Check(specimens.Items.Count == 0 && image.Source is null && canvas.Children.OfType<Polygon>().Count() == 0 && !((Button)window.FindName("PreviewButton")).IsEnabled, "Empty search clears the prior image, elements and contours");
+            search.Clear();
+            foreach (var index in new[] { 0, 1, 2, 3, 4, 0 }) specimens.SelectedIndex = index;
+            WaitImage(window);
+            Check(((AtlasSpecimen)specimens.SelectedItem).MaterialId == materialId && image.Source is BitmapSource loadedLatest && loadedLatest.PixelWidth == 1968, "Rapid selection displays only the last requested image");
+            elements.SelectedIndex = 0;
 
             var selected = (AtlasSpecimen)specimens.SelectedItem;
             var loaded = ImageLoader.Load(selected.ImagePath);
@@ -123,8 +146,34 @@ internal static class Program
                 Check(((Button)management.FindName("BackupButton")).IsEnabled, "Data management offers a full backup");
                 SaveScreenshot(management, System.IO.Path.Combine(output, "native-data.png"));
                 management.Close();
+                var tagWindow = new TagsWindow(data, selected.MaterialId, selected.Name, "ru");
+                tagWindow.Show();
+                Pump();
+                EditDictionaryDialog(tagWindow, "Создать…", "Тема", "Topic");
+                EditDictionaryDialog(tagWindow, "Создать тег…", "Эпителий", "Epithelium");
+                var tagList = (ListBox)tagWindow.FindName("TagList");
+                tagList.UpdateLayout();
+                var checkBox = VisualChildren<CheckBox>(tagList).Single();
+                checkBox.IsChecked = true;
+                Pump();
+                SaveScreenshot(tagWindow, System.IO.Path.Combine(output, "native-tags.png"));
+                ((Button)tagWindow.FindName("SaveAssignments")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(data.LoadTaxonomy().MaterialTags[selected.MaterialId!.Value].Count == 1, "Native dialog creates translated group/tag and saves material assignments");
                 data.CreateBackup(backupPath);
             }
+            var filtered = new MainWindow(AppContext.BaseDirectory, catalogRoot);
+            filtered.Show();
+            Pump();
+            ((Expander)filtered.FindName("TagFilterExpander")).IsExpanded = true;
+            filtered.UpdateLayout();
+            var filterBox = ((StackPanel)filtered.FindName("TagFilters")).Children.OfType<CheckBox>().Single();
+            filterBox.IsChecked = true;
+            var filteredList = (ListBox)filtered.FindName("ListOfSpecimens");
+            Check(filteredList.Items.Count == 1 && ((AtlasSpecimen)filteredList.Items[0]).MaterialId == selected.MaterialId, "Saved tag filters the native catalog after restart");
+            filteredList.SelectedIndex = 0;
+            WaitImage(filtered);
+            SaveScreenshot(filtered, System.IO.Path.Combine(output, "native-catalog-filter.png"));
+            filtered.Close();
             File.Delete(selected.ImagePath);
             var damagedMedia = new MainWindow(AppContext.BaseDirectory, catalogRoot);
             ((ListBox)damagedMedia.FindName("ListOfSpecimens")).SelectedIndex = 0;
@@ -134,8 +183,9 @@ internal static class Program
             var restoredRoot = System.IO.Path.Combine(temp, "restored");
             CatalogStore.RestoreBackup(backupPath, restoredRoot);
             var withoutSource = new MainWindow(temp, restoredRoot);
-            Check(((ListBox)withoutSource.FindName("ListOfSpecimens")).Items.Count == 10, "Restored database opens with no XML at the application source path");
+            Check(((ListBox)withoutSource.FindName("ListOfSpecimens")).Items.Count == 5, "Restored database opens with no XML at the application source path");
             ((ListBox)withoutSource.FindName("ListOfSpecimens")).SelectedIndex = 0;
+            WaitImage(withoutSource);
             Check(((Image)withoutSource.FindName("Specimen")).Source is not null, "Restored managed image renders");
             withoutSource.Close();
 
@@ -189,6 +239,35 @@ internal static class Program
         }
     }
 
+    private static IEnumerable<T> VisualChildren<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var nested in VisualChildren<T>(child)) yield return nested;
+        }
+    }
+    private static void EditDictionaryDialog(TagsWindow owner, string buttonTitle, string russian, string english)
+    {
+        owner.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            var dialog = Application.Current.Windows.Cast<Window>().Single(w => w.GetType().Name == "TaxonomyEditWindow");
+            dialog.UpdateLayout();
+            var fields = VisualChildren<TextBox>(dialog).ToArray();
+            fields[0].Text = russian;
+            fields[1].Text = english;
+            VisualChildren<Button>(dialog).Single(b => Equals(b.Content, "Сохранить")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        }));
+        VisualChildren<Button>(owner).Single(b => Equals(b.Content, buttonTitle)).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Pump();
+    }
+    private static void WaitImage(MainWindow window)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!((Button)window.FindName("PreviewButton")).IsEnabled && ((TextBlock)window.FindName("ImageMessage")).Text != "Изображение недоступно" && DateTime.UtcNow < deadline) Pump();
+        if (!((Button)window.FindName("PreviewButton")).IsEnabled) throw new Exception("Image did not load: " + ((TextBlock)window.FindName("StatusText")).Text);
+    }
     private static void Check(bool condition, string name)
     {
         if (!condition) throw new Exception(name);

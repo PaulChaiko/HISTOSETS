@@ -57,7 +57,9 @@ internal static class CatalogDatabase
             SELECT id FROM materials UNION ALL SELECT id FROM images UNION ALL SELECT id FROM elements
             UNION ALL SELECT id FROM regions UNION ALL SELECT id FROM import_batches
             UNION ALL SELECT id FROM material_translations UNION ALL SELECT id FROM element_translations
-            UNION ALL SELECT id FROM material_images;
+            UNION ALL SELECT id FROM material_images UNION ALL SELECT id FROM tag_groups
+            UNION ALL SELECT id FROM tag_group_translations UNION ALL SELECT id FROM tags
+            UNION ALL SELECT id FROM tag_translations UNION ALL SELECT id FROM material_tags;
             """))
         using (var reader = command.ExecuteReader())
             while (reader.Read())

@@ -15,6 +15,7 @@ public sealed record AtlasSpecimen(string Name, string ImagePath, string Summary
     public Guid? MaterialId { get; init; }
     public Guid? ImageId { get; init; }
     public string Locale { get; init; } = "und";
+    public string LocaleLabel => CatalogBrowser.LanguageName(Locale);
     public string? ImageIssue { get; init; }
 }
 public sealed record AtlasCatalog(IReadOnlyList<AtlasSpecimen> Specimens,

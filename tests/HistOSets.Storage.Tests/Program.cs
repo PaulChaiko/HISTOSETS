@@ -218,6 +218,78 @@ try
     Reject<CatalogStorageException>(() => CatalogStore.RestoreBackup(traversal, failedTarget), "Untrusted archive cannot escape the restore directory");
     Check(!File.Exists(Path.Combine(temp, "outside.xml")), "No file written outside restore staging");
     Check(Hash(sourceXml) == originalXmlHash && original.Specimens.All(s => metadataByHash.ContainsKey(Hash(s.ImagePath))), "All original XML and scientific images left unchanged");
+    var tagRoot = Path.Combine(temp, "TagCatalog");
+    CatalogStore.RestoreBackup(backup, tagRoot);
+    var tagsBackup = Path.Combine(temp, "tags.histosets");
+    Guid groupId, tagId, materialId;
+    using (var store = new CatalogStore(tagRoot))
+    {
+        var data = store.Load();
+        var ru = CatalogBrowser.Filter(data, "ru", "", [], CatalogTaxonomy.Empty);
+        var en = CatalogBrowser.Filter(data, "en", "", [], CatalogTaxonomy.Empty);
+        Check(ru.Count == 5 && en.Count == 5 && ru.Select(s => s.MaterialId).SequenceEqual(en.Select(s => s.MaterialId)), "One material card per language, stable material identity");
+        Check(CatalogBrowser.Filter(data, "en", "РОГОВИЦЫ", [], CatalogTaxonomy.Empty).Count == 2, "Cyrillic search works across translations even while displaying English");
+        Check(CatalogBrowser.Filter(data, "ru", "skin", [], CatalogTaxonomy.Empty).Single().Locale == "ru", "English query returns Russian card");
+        Check(CatalogBrowser.Filter(data, "ru", "роговицы большое", [], CatalogTaxonomy.Empty).Count == 1 && CatalogBrowser.Filter(data, "ru", "роговицы кожа", [], CatalogTaxonomy.Empty).Count == 0, "Multiple search terms narrow the result");
+        var special = new AtlasCatalog([data.Specimens[0] with { Name = "Жёлтая железа", Locale = "und" }], []);
+        Check(CatalogBrowser.Filter(special, "en", "ЖЕЛТАЯ", [], CatalogTaxonomy.Empty).Single().Locale == "und" && CatalogBrowser.Filter(special, "ru", "же\u0308лтая", [], CatalogTaxonomy.Empty).Count == 1, "E/YO and composed Unicode match, missing translations stay visible");
+        var sameNames = new AtlasCatalog([data.Specimens[0] with { Name = "Same" }, data.Specimens[1] with { Name = "Same" }], []);
+        Check(CatalogBrowser.Filter(sameNames, "ru", "", [], CatalogTaxonomy.Empty).Count == 2, "Equal material titles do not merge UUIDs");
+        var hashBeforeOpening = Hash(store.DatabasePath);
+        Check(store.LoadTaxonomy().Tags.Count == 0 && Hash(store.DatabasePath) == hashBeforeOpening && Convert.ToInt64(Sql(store.DatabasePath, "PRAGMA user_version;")) == 1, "Existing update2 schema opens without a destructive migration or invented tags");
+
+        groupId = store.SaveTagGroup(null, "Тема", "Topic");
+        var purpose = store.SaveTagGroup(null, "Назначение", "Purpose");
+        tagId = store.SaveTag(null, groupId, "Эпителий", "Epithelium");
+        var other = store.SaveTag(null, groupId, "Другая ткань", "Other tissue");
+        var teaching = store.SaveTag(null, purpose, "Учебный", "Teaching");
+        materialId = ru[0].MaterialId!.Value;
+        var secondMaterial = ru[1].MaterialId!.Value;
+        store.SetMaterialTags(materialId, [tagId, teaching]);
+        store.SetMaterialTags(secondMaterial, [other]);
+        var taxonomy = store.LoadTaxonomy();
+        Check(taxonomy.Groups.Count == 2 && taxonomy.Tags.Count == 3 && taxonomy.MaterialTags[materialId].SetEquals([tagId, teaching]), "Create translated groups and tags, assign material-wide tags");
+        Check(CatalogBrowser.Filter(data, "ru", "", [tagId, other], taxonomy).Count == 2, "Tag alternatives in one group use OR");
+        Check(CatalogBrowser.Filter(data, "en", "", [tagId, other, teaching], taxonomy).Single().MaterialId == materialId, "Different tag groups use AND independent of display language");
+        var link = Sql(store.DatabasePath, $"SELECT id FROM material_tags WHERE material_id = '{materialId}' AND tag_id = '{tagId}';");
+        var revision = Sql(store.DatabasePath, $"SELECT revision FROM materials WHERE id = '{materialId}';");
+        var assignedHash = Hash(store.DatabasePath);
+        store.SetMaterialTags(materialId, [tagId, teaching, tagId]);
+        Check(Hash(store.DatabasePath) == assignedHash && Equals(revision, Sql(store.DatabasePath, $"SELECT revision FROM materials WHERE id = '{materialId}';")), "Repeated assignment is a no-op including record revisions");
+        Reject<CatalogStorageException>(() => store.SaveTagGroup(null, "ТЕМА", ""), "Duplicate Cyrillic group name is rejected");
+        Reject<CatalogStorageException>(() => store.SaveTag(null, groupId, "ЭПИТЕЛИЙ", ""), "Duplicate tag in one group is rejected");
+        Reject<CatalogStorageException>(() => store.SaveTagGroup(null, " ", ""), "Blank dictionary entry is rejected");
+        Reject<CatalogStorageException>(() => store.SaveTag(null, Guid.NewGuid(), "Orphan", ""), "Missing group cannot receive a tag");
+        Reject<CatalogStorageException>(() => store.SetMaterialTags(materialId, [Guid.NewGuid()]), "Unknown tag cannot remove existing assignments");
+        Check(store.LoadTaxonomy().MaterialTags[materialId].SetEquals([tagId, teaching]), "Rejected mutation preserves the prior complete tag set");
+        Sql(store.DatabasePath, "CREATE TRIGGER fail_tags BEFORE INSERT ON material_tags BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END;");
+        Reject<CatalogStorageException>(() => store.SetMaterialTags(materialId, [other]), "Assignment handles failure after removals within the transaction");
+        Sql(store.DatabasePath, "DROP TRIGGER fail_tags;");
+        Check(store.LoadTaxonomy().MaterialTags[materialId].SetEquals([tagId, teaching]), "Failed assignment rolls all removals back");
+        store.SetMaterialTags(materialId, [teaching]);
+        store.SetMaterialTags(materialId, [tagId, teaching]);
+        Check(Equals(link, Sql(store.DatabasePath, $"SELECT id FROM material_tags WHERE material_id = '{materialId}' AND tag_id = '{tagId}';")), "Reassignment revives the same link UUID");
+        store.SaveTagGroup(groupId, "Тема занятия", "Topic");
+        store.SaveTag(tagId, groupId, "Эпителиальные ткани", "Epithelial tissue");
+        Check(store.LoadTaxonomy().MaterialTags[materialId].Contains(tagId) && CatalogBrowser.Label(store.LoadTaxonomy().Tags.Single(t => t.Id == tagId).Names, "ru") == "Эпителиальные ткани", "Rename preserves tag identity and assignments");
+        Reject<CatalogStorageException>(() => store.DeleteTagGroup(groupId), "Nonempty group cannot be deleted accidentally");
+        store.DeleteTag(other);
+        Check(!store.LoadTaxonomy().MaterialTags.ContainsKey(secondMaterial) && !store.LoadTaxonomy().Tags.Any(t => t.Id == other), "Deleting a tag removes its active assignments");
+        Check(Convert.ToInt64(Sql(store.DatabasePath, $"SELECT COUNT(*) FROM material_tags WHERE tag_id = '{other}' AND deleted_utc IS NOT NULL;")) == 1, "Removed assignment retains a deletion marker");
+        var empty = store.SaveTagGroup(null, "Временная", "");
+        store.DeleteTagGroup(empty);
+        Check(!store.LoadTaxonomy().Groups.Any(g => g.Id == empty), "Empty group can be removed");
+        Check(Equivalent(original, store.Load(), Metadata) && store.ImportLegacy(sourceXml, source, Metadata).AlreadyImported, "Tag edits preserve every source text, image, contour and original import identity");
+        store.CreateBackup(tagsBackup);
+    }
+    var tagRestore = Path.Combine(temp, "RestoredTags");
+    CatalogStore.RestoreBackup(tagsBackup, tagRestore);
+    using (var store = new CatalogStore(tagRestore))
+    {
+        var taxonomy = store.LoadTaxonomy();
+        Check(taxonomy.MaterialTags[materialId].Contains(tagId) && taxonomy.Groups.Any(g => g.Id == groupId) && taxonomy.Tags.Single(t => t.Id == tagId).Names.Count == 2, "Full backup restores tag identities, translations and assignments");
+        Check(Equivalent(original, store.Load(), Metadata), "Restored tag catalog still preserves all atlas geometry and descriptions");
+    }
     Console.WriteLine($"{count} storage checks passed.");
 }
 finally { Directory.Delete(temp, true); }
