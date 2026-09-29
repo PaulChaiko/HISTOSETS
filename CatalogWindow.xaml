@@ -7,7 +7,7 @@
     <Grid Margin="22">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <TextBlock Text="Каталог HISTOSETS" FontSize="24" FontWeight="SemiBold" Foreground="#48396B"/>
         <TextBox x:Name="LocationText" Grid.Row="1" IsReadOnly="True" TextWrapping="Wrap" Margin="0,12,0,8"/>
@@ -23,9 +23,12 @@
             <StackPanel>
                 <TextBlock TextWrapping="Wrap" Background="{StaticResource BrandSurfaceBrush}" Padding="12"
                            Text="Резервная копия включает базу, изображения и исходный XML. Для восстановления выберите пустую папку: текущий каталог сохранится.&#10;&#10;Просмотр читает базу SQLite. Изменение исходного XML после импорта не меняет каталог автоматически. Повтор того же импорта не создаёт дубликатов. Для другой версии XML создайте отдельный каталог.&#10;&#10;При выборе XML рядом с его папкой ATLAS должна находиться папка SPECIMENS с изображениями. Полноценный редактор материалов пока разрабатывается."/>
-                <TextBlock x:Name="OperationStatus" TextWrapping="Wrap" Margin="0,12,0,0" Padding="12" Background="{StaticResource BrandSurfaceBrush}"/>
             </StackPanel>
         </ScrollViewer>
-        <Button x:Name="CloseButton" Grid.Row="5" Content="Закрыть" HorizontalAlignment="Right" IsCancel="True" MinWidth="100"/>
+        <ScrollViewer x:Name="OperationPanel" Grid.Row="5" MaxHeight="150" Margin="0,0,0,12"
+                      VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+            <TextBlock x:Name="OperationStatus" TextWrapping="Wrap" Padding="12" Background="{StaticResource BrandSurfaceBrush}"/>
+        </ScrollViewer>
+        <Button x:Name="CloseButton" Grid.Row="6" Content="Закрыть" HorizontalAlignment="Right" IsCancel="True" MinWidth="100"/>
     </Grid>
 </Window>

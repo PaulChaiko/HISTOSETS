@@ -49,7 +49,7 @@ public partial class MainWindow : Window
             ListOfSpecimens.SelectedIndex = -1;
             ResetSpecimenView();
         }
-        catch (Exception ex) when (ex is CatalogStorageException or SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is CatalogStorageException or SqliteException or IOException or InvalidDataException or FileFormatException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             ErrorLog.Write(ex);
             catalog = null;
@@ -92,7 +92,12 @@ public partial class MainWindow : Window
         ListOfElements.ItemsSource = current.Elements;
         try
         {
-            if (current.ImageIssue is not null) throw new InvalidDataException(current.ImageIssue);
+            if (current.ImageIssue is not null)
+            {
+                ImageMessage.Text = "Изображение недоступно";
+                StatusText.Text = current.ImageIssue;
+                return;
+            }
             image = ImageLoader.Load(current.ImagePath);
             Desk.Width = Specimen.Width = image.PixelWidth;
             Desk.Height = Specimen.Height = image.PixelHeight;
@@ -101,7 +106,7 @@ public partial class MainWindow : Window
             PreviewButton.IsEnabled = true;
             StatusText.Text = $"{image.PixelWidth} × {image.PixelHeight} пикселей. Элементов: {current.Elements.Count}.";
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or FileFormatException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or NotSupportedException or FileFormatException or ArgumentException)
         {
             ErrorLog.Write(ex);
             ImageMessage.Text = "Изображение недоступно";

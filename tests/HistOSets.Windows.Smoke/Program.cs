@@ -198,6 +198,7 @@ internal static class Program
     }
     private static void SaveScreenshot(Window window, string path)
     {
+        if (!window.IsVisible || window.ActualWidth < 1 || window.ActualHeight < 1) return;
         window.UpdateLayout();
         var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
         bitmap.Render(window);

@@ -138,7 +138,7 @@ public sealed partial class CatalogStore
                 Validate(connection);
                 return new(false, Statistics(connection));
             }
-            catch (Exception ex) when (ex is AtlasLoadException or SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            catch (Exception ex) when (ex is AtlasLoadException or SqliteException or IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
                 throw new CatalogStorageException("Не удалось импортировать XML.\n" + ex.Message, ex);
             }

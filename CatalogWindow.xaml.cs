@@ -37,6 +37,7 @@ public partial class CatalogWindow : Window
     {
         busy = true;
         Actions.IsEnabled = CloseButton.IsEnabled = false;
+        OperationPanel.Visibility = Visibility.Visible;
         OperationStatus.Text = "Выполняется операция. Не закрывайте приложение…";
         try
         {
@@ -80,6 +81,7 @@ public partial class CatalogWindow : Window
         if (folder.ShowDialog(this) != true) return;
         if (store is not null && string.Equals(Path.GetFullPath(folder.FolderName), store.RootDirectory, StringComparison.OrdinalIgnoreCase))
         {
+            OperationPanel.Visibility = Visibility.Visible;
             OperationStatus.Text = "Этот каталог уже открыт.";
             return;
         }
