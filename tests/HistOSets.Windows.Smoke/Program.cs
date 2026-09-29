@@ -139,6 +139,12 @@ internal static class Program
             Check(((Image)withoutSource.FindName("Specimen")).Source is not null, "Restored managed image renders");
             withoutSource.Close();
 
+            var backgroundImport = System.IO.Path.Combine(temp, "background-import");
+            Task.Run(() => CatalogStore.CreateFromLegacy(System.IO.Path.Combine(AppContext.BaseDirectory, "ATLAS", "ATLAS.xml"),
+                AppContext.BaseDirectory, backgroundImport, ImageLoader.ReadMetadata)).GetAwaiter().GetResult();
+            using (var created = new CatalogStore(backgroundImport))
+                Check(created.GetStatistics() == new CatalogStatistics(5, 5, 10, 27, 33), "Data-window background WIC import creates a complete separate catalog");
+
             Directory.CreateDirectory(System.IO.Path.Combine(temp, "ATLAS"));
             Directory.CreateDirectory(System.IO.Path.Combine(temp, "SPECIMENS"));
             var xml = System.IO.Path.Combine(temp, "ATLAS", "ATLAS.xml");

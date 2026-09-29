@@ -157,6 +157,13 @@ try
         Reject<CatalogStorageException>(() => store.ImportLegacy(malformed, source, Metadata), "Missing original file aborts import, rather than dropping a record");
         Check(store.GetStatistics().Materials == 0, "Failed initial import leaves no partial material");
     }
+    var creationTarget = Path.Combine(temp, "NewCatalog");
+    Directory.CreateDirectory(creationTarget);
+    Reject<CatalogStorageException>(() => CatalogStore.CreateFromLegacy(malformed, source, creationTarget, Metadata), "Failed catalog creation reports invalid XML source");
+    Check(!Directory.EnumerateFileSystemEntries(creationTarget).Any(), "Failed creation leaves the destination empty and retryable");
+    CatalogStore.CreateFromLegacy(sourceXml, source, creationTarget, Metadata);
+    using (var created = new CatalogStore(creationTarget))
+        Check(Equivalent(original, created.Load(), Metadata), "Successful new catalog appears with all files and can be opened");
     var custom = Path.Combine(temp, "custom.xml");
     var imageName = Path.GetFileName(original.Specimens[0].ImagePath);
     File.WriteAllText(custom, $"""

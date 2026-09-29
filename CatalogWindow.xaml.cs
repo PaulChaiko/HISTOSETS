@@ -112,12 +112,8 @@ public partial class CatalogWindow : Window
         if (file.ShowDialog(this) != true) return;
         var folder = new OpenFolderDialog { Title = "Выберите пустую папку для нового каталога" };
         if (folder.ShowDialog(this) != true) return;
-        await Run(() =>
-        {
-            if (Directory.EnumerateFileSystemEntries(folder.FolderName).Any()) throw new CatalogStorageException("Нужна пустая папка для нового каталога.");
-            using var candidate = new CatalogStore(folder.FolderName);
-            candidate.ImportLegacy(file.FileName, SourceRoot(file.FileName), ImageLoader.ReadMetadata);
-        }, "Каталог создан.", folder.FolderName);
+        await Run(() => CatalogStore.CreateFromLegacy(file.FileName, SourceRoot(file.FileName), folder.FolderName, ImageLoader.ReadMetadata),
+            "Каталог создан.", folder.FolderName);
     }
 
     private async void Import_Click(object sender, RoutedEventArgs e)

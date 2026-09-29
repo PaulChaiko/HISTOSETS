@@ -12,6 +12,22 @@ public sealed partial class CatalogStore
     private sealed record PreparedImage(string OriginalPath, string StagedPath, string Key, string Hash, long Size, ImageMetadata Metadata);
     private sealed record LegacyRecord(int Index, string MaterialKey, string Locale, int GeometryIndex);
 
+    public static void CreateFromLegacy(string xmlPath, string sourceDirectory, string targetDirectory, Func<string, ImageMetadata> readMetadata)
+    {
+        targetDirectory = Path.GetFullPath(targetDirectory);
+        RequireEmpty(targetDirectory);
+        var parent = Path.GetDirectoryName(targetDirectory) ?? throw new CatalogStorageException("Выберите отдельную папку каталога.");
+        var stage = Path.Combine(parent, ".histosets-import-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using (var candidate = new CatalogStore(stage)) candidate.ImportLegacy(xmlPath, sourceDirectory, readMetadata);
+            RequireEmpty(targetDirectory);
+            if (Directory.Exists(targetDirectory)) Directory.Delete(targetDirectory, recursive: false);
+            Directory.Move(stage, targetDirectory);
+        }
+        finally { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
+    }
+
     public ImportResult ImportLegacy(string xmlPath, string sourceDirectory, Func<string, ImageMetadata> readMetadata)
     {
         lock (gate)
