@@ -3,6 +3,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
+        <ImageBrush x:Key="BrandBackgroundBrush" ImageSource="LOGO/GBL.png" Stretch="UniformToFill" />
+        <SolidColorBrush x:Key="SpecimenListBrush" Color="#B8A0E6" />
+        <SolidColorBrush x:Key="ElementListBrush" Color="#FFC5F5" />
+        <SolidColorBrush x:Key="BrandSurfaceBrush" Color="#EEFFFFFF" />
         <Style TargetType="Button">
             <Setter Property="Padding" Value="12,6" />
             <Setter Property="Margin" Value="0,0,8,0" />

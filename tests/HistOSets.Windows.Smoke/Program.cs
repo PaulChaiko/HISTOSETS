@@ -36,7 +36,12 @@ internal static class Program
             var elements = (ListBox)window.FindName("ListOfElements");
             var image = (Image)window.FindName("Specimen");
             var canvas = (Canvas)window.FindName("Desk");
-            Check(specimens.Items.Count == 10 && image.Source is not null, "Portable data loads from application directory");
+            var welcome = (Image)window.FindName("WelcomeLogo");
+            Check(specimens.Items.Count == 10, "Portable data loads from application directory");
+            Check(specimens.SelectedIndex == -1 && image.Source is null && welcome.Source is not null && welcome.IsVisible,
+                "Startup displays the original logo until a specimen is selected");
+            Check(!((Button)window.FindName("PreviewButton")).IsEnabled, "Preview requires a selected specimen");
+            SaveScreenshot(window, System.IO.Path.Combine(output, "native-welcome.png"));
             var regions = 0;
             foreach (AtlasSpecimen specimen in specimens.Items)
             {
@@ -59,9 +64,13 @@ internal static class Program
                 }
             }
             Check(regions == 66, "All 66 baseline polygons rendered");
+            specimens.SelectedIndex = -1;
+            Check(welcome.IsVisible && image.Source is null && canvas.Children.OfType<Polygon>().Count() == 0,
+                "Clearing selection restores logo without stale image or contours");
             specimens.SelectedIndex = 0;
             elements.SelectedIndex = 0;
             Pump();
+            Check(!welcome.IsVisible, "Logo does not cover the selected specimen");
             SaveScreenshot(window, System.IO.Path.Combine(output, "native-view.png"));
 
             var selected = (AtlasSpecimen)specimens.SelectedItem;
@@ -103,6 +112,7 @@ internal static class Program
             var xml = System.IO.Path.Combine(temp, "ATLAS", "ATLAS.xml");
             File.WriteAllText(xml, "<ATLAS><Specimen NAME='Missing' IMAGE='missing.jpg'/></ATLAS>");
             var broken = new MainWindow(temp);
+            ((ListBox)broken.FindName("ListOfSpecimens")).SelectedIndex = 0;
             Check(((TextBlock)broken.FindName("ImageMessage")).Text == "Изображение недоступно", "Missing image leaves window usable");
             Check(!((Button)broken.FindName("PreviewButton")).IsEnabled, "Missing image cannot open preview");
             broken.Close();

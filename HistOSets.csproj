@@ -14,7 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="src\HistOSets.Core\HistOSets.Core.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
-    <Resource Include="LOGO\Icon.ico;LOGO\LOGO2.png" />
+    <Resource Include="LOGO\Icon.ico;LOGO\LOGO2.png;LOGO\GBL.png" />
     <Content Include="ATLAS\ATLAS.xml;SPECIMENS\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

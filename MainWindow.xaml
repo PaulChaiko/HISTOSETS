@@ -2,14 +2,14 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="HISTOSETS — update1" Height="780" Width="1280" MinWidth="900" MinHeight="560"
-        Background="#F2F0F6" FontFamily="Segoe UI" FontSize="14" WindowStartupLocation="CenterScreen">
+        Background="{StaticResource BrandBackgroundBrush}" FontFamily="Segoe UI" FontSize="14" WindowStartupLocation="CenterScreen">
     <Grid Margin="14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <DockPanel Margin="0,0,0,12">
+        <DockPanel Margin="0,0,0,12" Background="{StaticResource BrandSurfaceBrush}">
             <TextBlock Text="HISTOSETS" FontSize="24" FontWeight="SemiBold" Foreground="#48396B" Margin="0,0,24,0"/>
             <Button Content="Обновить каталог" Click="Reload_Click"/>
             <Button x:Name="PreviewButton" Content="Новый просмотрщик" Click="Preview_Click" IsEnabled="False"/>
@@ -26,9 +26,9 @@
             </Grid.ColumnDefinitions>
             <Grid>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="3*"/><RowDefinition Height="2*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Text="Препараты" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <TextBlock Text="Препараты" FontWeight="SemiBold" Margin="0,0,0,6" Background="{StaticResource BrandSurfaceBrush}"/>
                 <ListBox x:Name="ListOfSpecimens" Grid.Row="1" SelectionChanged="Specimen_SelectionChanged"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,8">
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,8" Background="{StaticResource SpecimenListBrush}">
                     <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Name}" TextWrapping="Wrap" Margin="3"/></DataTemplate></ListBox.ItemTemplate>
                     <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListBox.ItemContainerStyle>
                 </ListBox>
@@ -36,29 +36,34 @@
                 <Button x:Name="SInfo" Grid.Row="3" Content="О препарате" Click="SInfo_Click" IsEnabled="False" Margin="0"/>
             </Grid>
             <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="Transparent"/>
-            <Border Grid.Column="2" Background="#202027" CornerRadius="4" Padding="8">
+            <Border Grid.Column="2" Padding="8">
                 <Grid>
                     <Viewbox Stretch="Uniform">
                         <Canvas x:Name="Desk" Width="800" Height="600" ClipToBounds="True">
                             <Image x:Name="Specimen" Width="800" Height="600" Stretch="Fill"/>
                         </Canvas>
                     </Viewbox>
-                    <TextBlock x:Name="ImageMessage" Text="Выберите препарат" Foreground="White" TextWrapping="Wrap"
+                    <Image x:Name="WelcomeLogo" Source="LOGO/LOGO2.png" Stretch="Uniform" VerticalAlignment="Center"
+                           RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False"/>
+                    <TextBlock x:Name="ImageMessage" Text="Выберите препарат" Foreground="#332D40" TextWrapping="Wrap"
+                               Background="{StaticResource BrandSurfaceBrush}" Padding="14" TextAlignment="Center" Visibility="Collapsed"
                                HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24"/>
                 </Grid>
             </Border>
             <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" Background="Transparent"/>
             <Grid Grid.Column="4">
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="2*"/><RowDefinition Height="3*"/></Grid.RowDefinitions>
-                <TextBlock Text="Элементы препарата" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <TextBlock Text="Элементы препарата" FontWeight="SemiBold" Margin="0,0,0,6" Background="{StaticResource BrandSurfaceBrush}"/>
                 <Button x:Name="EInfo" Grid.Row="1" Content="Об элементе" Click="EInfo_Click" IsEnabled="False" Margin="0,0,0,8"/>
                 <TextBox x:Name="AboutE" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                <ListBox x:Name="ListOfElements" Grid.Row="3" SelectionChanged="Element_SelectionChanged" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox x:Name="ListOfElements" Grid.Row="3" SelectionChanged="Element_SelectionChanged" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         Background="{StaticResource ElementListBrush}">
                     <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Name}" TextWrapping="Wrap" Margin="3"/></DataTemplate></ListBox.ItemTemplate>
                     <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListBox.ItemContainerStyle>
                 </ListBox>
             </Grid>
         </Grid>
-        <TextBlock x:Name="StatusText" Grid.Row="2" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="#60576F"/>
+        <TextBlock x:Name="StatusText" Grid.Row="2" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="#60576F"
+                   Background="{StaticResource BrandSurfaceBrush}"/>
     </Grid>
 </Window>

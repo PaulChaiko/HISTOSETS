@@ -111,7 +111,9 @@ async function load(payload) {
   setEnabled(false);
   setTool('navigate');
   viewer.close();
-  anno.clearAnnotations();
+  // Loading another image is an import, not an undoable user edit.
+  // setAnnotations also avoids Annotorious' empty-history race during early startup.
+  anno.setAnnotations([]);
   selectedElement = null;
   elements = payload.elements ?? [];
   currentSource = payload.tileSource;

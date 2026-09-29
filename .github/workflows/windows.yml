@@ -88,5 +88,5 @@ jobs:
         if: always()
         with:
           name: windows-smoke-results
-          path: artifacts/native-view.png
+          path: artifacts/native-*.png
           retention-days: 30

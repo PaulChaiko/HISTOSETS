@@ -5,8 +5,11 @@ process.chdir(fileURLToPath(new URL('.', import.meta.url)));
 await rm('dist', { recursive: true, force: true });
 await mkdir('dist');
 const result = await build({ entryPoints: ['src/viewer.js'], bundle: true, minify: true,
-  sourcemap: false, metafile: true, outfile: 'dist/viewer.js', target: ['es2022'], legalComments: 'linked' });
+  sourcemap: false, metafile: true, outfile: 'dist/viewer.js', target: ['es2022'], legalComments: 'linked',
+  loader: { '.png': 'file' }, assetNames: 'branding/[name]' });
 await copyFile('src/index.html', 'dist/index.html');
+await mkdir('dist/branding', { recursive: true });
+await copyFile('../LOGO/LOGO2.png', 'dist/branding/LOGO2.png');
 let notices = await readFile('THIRD-PARTY-NOTICES.txt', 'utf8');
 const packages = new Set(Object.keys(result.metafile.inputs).flatMap(path => {
   const match = path.match(/node_modules\/((?:@[^/]+\/)?[^/]+)\//);

@@ -35,8 +35,8 @@ public partial class MainWindow : Window
             ListOfSpecimens.ItemsSource = next.Specimens;
             CatalogCount.Text = $"Записей: {next.Specimens.Count}";
             WarningsButton.Visibility = next.Warnings.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            StatusText.Text = "Выберите препарат, затем его элемент. Для выбора достаточно одного щелчка.";
-            ListOfSpecimens.SelectedIndex = 0;
+            ListOfSpecimens.SelectedIndex = -1;
+            ResetSpecimenView();
         }
         catch (AtlasLoadException ex)
         {
@@ -45,15 +45,15 @@ public partial class MainWindow : Window
             ListOfSpecimens.ItemsSource = null;
             CatalogCount.Text = "Каталог недоступен";
             WarningsButton.Visibility = Visibility.Collapsed;
+            WelcomeLogo.Visibility = Visibility.Collapsed;
             ImageMessage.Text = "Не удалось загрузить каталог";
             ImageMessage.Visibility = Visibility.Visible;
             StatusText.Text = ex.Message + "\nИсправьте файл и нажмите «Обновить каталог».";
         }
     }
 
-    private void Specimen_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void ResetSpecimenView()
     {
-        if (ListOfElements is null) return;
         ListOfElements.ItemsSource = null;
         ClearPolygons();
         Specimen.Source = null;
@@ -61,10 +61,20 @@ public partial class MainWindow : Window
         AboutS.Text = "";
         AboutE.Text = "";
         SInfo.IsEnabled = EInfo.IsEnabled = PreviewButton.IsEnabled = false;
-        ImageMessage.Text = "Выберите препарат";
-        ImageMessage.Visibility = Visibility.Visible;
+        WelcomeLogo.Visibility = Visibility.Visible;
+        ImageMessage.Visibility = Visibility.Collapsed;
+        StatusText.Text = "Выберите препарат, затем его элемент. Для выбора достаточно одного щелчка.";
+    }
+
+    private void Specimen_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ListOfElements is null) return;
+        ResetSpecimenView();
         var current = CurrentSpecimen;
         if (current is null) return;
+        WelcomeLogo.Visibility = Visibility.Collapsed;
+        ImageMessage.Text = "Загрузка изображения…";
+        ImageMessage.Visibility = Visibility.Visible;
         AboutS.Text = Fallback(current.Summary);
         SInfo.IsEnabled = !string.IsNullOrWhiteSpace(current.Description);
         ListOfElements.ItemsSource = current.Elements;
