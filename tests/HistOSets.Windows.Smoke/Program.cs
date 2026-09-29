@@ -15,12 +15,6 @@ using Microsoft.Web.WebView2.Wpf;
 internal static class Program
 {
     private static int checks;
-    // The published-app launch is checked separately. This harness owns its windows
-    // and their temporary catalogs, rather than opening the user's default catalog.
-    private sealed class SmokeApp : App
-    {
-        protected override void OnStartup(StartupEventArgs e) { }
-    }
     [STAThread]
     private static int Main(string[] args)
     {
@@ -33,7 +27,7 @@ internal static class Program
         {
             // Reproduce launching a portable build from a shortcut with another working folder.
             Environment.CurrentDirectory = temp;
-            var app = new SmokeApp();
+            var app = new App();
             app.InitializeComponent();
             app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             // Programmatic control changes below run outside Dispatcher.PushFrame.
@@ -41,6 +35,9 @@ internal static class Program
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
             var catalogRoot = System.IO.Path.Combine(temp, "catalog");
             var window = new MainWindow(AppContext.BaseDirectory, catalogRoot);
+            // Supply the startup window before pumping the dispatcher, so App
+            // uses only this isolated catalog. The published EXE is tested separately.
+            app.MainWindow = window;
             window.Show();
             Pump();
             Check(app.Windows.Count == 1, "Smoke harness opens only its isolated catalog window");
