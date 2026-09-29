@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>LOGO\Icon.ico</ApplicationIcon>
     <RootNamespace>HistOSets</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.4.0</Version>
     <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**;Viewer/**;artifacts/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
