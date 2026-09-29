@@ -15,6 +15,12 @@ using Microsoft.Web.WebView2.Wpf;
 internal static class Program
 {
     private static int checks;
+    // The published-app launch is checked separately. This harness owns its windows
+    // and their temporary catalogs, rather than opening the user's default catalog.
+    private sealed class SmokeApp : App
+    {
+        protected override void OnStartup(StartupEventArgs e) { }
+    }
     [STAThread]
     private static int Main(string[] args)
     {
@@ -27,13 +33,17 @@ internal static class Program
         {
             // Reproduce launching a portable build from a shortcut with another working folder.
             Environment.CurrentDirectory = temp;
-            var app = new App();
+            var app = new SmokeApp();
             app.InitializeComponent();
             app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            // Programmatic control changes below run outside Dispatcher.PushFrame.
+            // Keep async UI continuations on the dispatcher just as real clicks do.
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
             var catalogRoot = System.IO.Path.Combine(temp, "catalog");
             var window = new MainWindow(AppContext.BaseDirectory, catalogRoot);
             window.Show();
             Pump();
+            Check(app.Windows.Count == 1, "Smoke harness opens only its isolated catalog window");
             var specimens = (ListBox)window.FindName("ListOfSpecimens");
             var elements = (ListBox)window.FindName("ListOfElements");
             var image = (Image)window.FindName("Specimen");
@@ -53,9 +63,7 @@ internal static class Program
             language.SelectedIndex = languageIndex;
             foreach (AtlasSpecimen specimen in specimens.Items.Cast<AtlasSpecimen>().ToArray())
             {
-                Console.WriteLine("Selecting " + specimen.Name + " index=" + specimens.Items.IndexOf(specimen));
                 specimens.SelectedItem = specimen;
-                Console.WriteLine("Selected=" + (specimens.SelectedItem as AtlasSpecimen)?.Name + " images=" + ((ComboBox)window.FindName("ImageSelector")).Items.Count + " status=" + ((TextBlock)window.FindName("ImageMessage")).Text);
                 WaitImage(window);
                 Check(image.Source is not null, "Image: " + specimen.Name);
                 Check(canvas.Children.OfType<Polygon>().Count() == 0, "No stale contours after image switch");
