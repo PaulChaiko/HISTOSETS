@@ -146,6 +146,7 @@ public partial class MainWindow : Window
     private void Search_Changed(object sender, TextChangedEventArgs e) { if (IsInitialized) ApplyFilters(); }
     private void Options_Changed(object sender, SelectionChangedEventArgs e)
     {
+        Console.WriteLine($"Options_Changed source={(e.OriginalSource as FrameworkElement)?.Name} updating={updating}");
         if (!IsInitialized || catalog is null) return;
         BuildTagFilters();
         ApplyFilters();
@@ -176,11 +177,13 @@ public partial class MainWindow : Window
 
     private void Specimen_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        Console.WriteLine($"Specimen_SelectionChanged index={ListOfSpecimens.SelectedIndex} updating={updating}");
         if (ListOfElements is null || updating) return;
         ShowMaterial();
     }
     private void ShowMaterial(Guid? element = null, Guid? selectedImage = null)
     {
+        Console.WriteLine($"ShowMaterial index={ListOfSpecimens.SelectedIndex}");
         ResetSpecimenView();
         updating = true;
         ImageSelector.ItemsSource = null;
@@ -198,6 +201,7 @@ public partial class MainWindow : Window
     }
     private void Image_Changed(object sender, SelectionChangedEventArgs e)
     {
+        Console.WriteLine($"Image_Changed index={ImageSelector.SelectedIndex} updating={updating}");
         if (updating || ListOfElements is null) return;
         var element = CurrentElement?.Id;
         ResetSpecimenView();

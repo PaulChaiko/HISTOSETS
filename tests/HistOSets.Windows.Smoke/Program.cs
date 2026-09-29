@@ -53,7 +53,9 @@ internal static class Program
             language.SelectedIndex = languageIndex;
             foreach (AtlasSpecimen specimen in specimens.Items.Cast<AtlasSpecimen>().ToArray())
             {
+                Console.WriteLine("Selecting " + specimen.Name + " index=" + specimens.Items.IndexOf(specimen));
                 specimens.SelectedItem = specimen;
+                Console.WriteLine("Selected=" + (specimens.SelectedItem as AtlasSpecimen)?.Name + " images=" + ((ComboBox)window.FindName("ImageSelector")).Items.Count + " status=" + ((TextBlock)window.FindName("ImageMessage")).Text);
                 WaitImage(window);
                 Check(image.Source is not null, "Image: " + specimen.Name);
                 Check(canvas.Children.OfType<Polygon>().Count() == 0, "No stale contours after image switch");
