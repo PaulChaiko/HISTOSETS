@@ -67,9 +67,10 @@ try
     var root = Path.Combine(temp, "Каталог ' с пробелом");
     var backup = Path.Combine(temp, "complete.histosets");
     AtlasCatalog imported;
-    using (var store = new CatalogStore(root))
+    using (var store = new CatalogStore(root + Path.DirectorySeparatorChar))
     {
-        var result = store.ImportLegacy(sourceXml, source, Metadata);
+        // AppContext.BaseDirectory on Windows ends in a separator; folder-dialog paths usually do not.
+        var result = store.ImportLegacy(sourceXml, source + Path.DirectorySeparatorChar, Metadata);
         Check(!result.AlreadyImported && result.Statistics == new CatalogStatistics(5, 5, 10, 27, 33), "Baseline normalized to 5 materials / 5 images / 10 translations / 27 elements / 33 regions");
         imported = store.Load();
         Check(Equivalent(original, imported, Metadata), "Every description, name, image byte and vertex survives XML → SQLite");
@@ -124,6 +125,18 @@ try
     var futureHash = Hash(futureDb);
     Reject<CatalogStorageException>(() => { using var invalid = new CatalogStore(newer); }, "Newer schema is rejected without downgrade");
     Check(Hash(futureDb) == futureHash, "Unsupported database bytes remain unchanged");
+
+    var corrupt = Path.Combine(temp, "Corrupt");
+    CatalogStore.RestoreBackup(backup, corrupt);
+    var corruptDb = Path.Combine(corrupt, "catalog.sqlite");
+    File.WriteAllText(corruptDb, "damaged database header");
+    Reject<SqliteException>(() => { using var invalid = new CatalogStore(corrupt); }, "Corrupted SQLite is rejected without replacing it with an empty atlas");
+    var recovery = Path.Combine(temp, "Recovery");
+    CatalogStore.RestoreBackup(backup, recovery);
+    using (var recovered = new CatalogStore(recovery))
+        Check(Equivalent(original, recovered.Load(), Metadata) && File.ReadAllText(corruptDb) == "damaged database header", "Recovery opens a complete copy and preserves the damaged original");
+    File.Delete(corruptDb);
+    Reject<CatalogStorageException>(() => { using var invalid = new CatalogStore(corrupt); }, "Missing database in a populated catalog is never silently recreated");
 
     var transactional = Path.Combine(temp, "Transaction");
     using (var store = new CatalogStore(transactional))

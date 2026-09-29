@@ -31,7 +31,8 @@ internal static class StorageFiles
         if (string.IsNullOrWhiteSpace(key) || key.Contains('\\') || key.Contains(':') || key.StartsWith('/') ||
             key.Split('/').Any(p => p is "" or "." or ".."))
             throw new CatalogStorageException("Недопустимый путь файла в каталоге: " + key);
-        var fullRoot = Path.GetFullPath(root) + Path.DirectorySeparatorChar;
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
         var fullPath = Path.GetFullPath(Path.Combine(root, key.Replace('/', Path.DirectorySeparatorChar)));
         if (!fullPath.StartsWith(fullRoot, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new CatalogStorageException("Путь выходит за пределы каталога.");
