@@ -9,3 +9,9 @@ artifacts/
 TestResults/
 playwright-report/
 test-results/
+
+Catalog/
+*.sqlite
+*.sqlite-*
+*.histosets
+*.partial-*

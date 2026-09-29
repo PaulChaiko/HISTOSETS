@@ -5,9 +5,18 @@ public enum CoordinateSpace { LegacyDip, Pixels }
 public readonly record struct AtlasPoint(double X, double Y);
 public sealed record AtlasPolygon(IReadOnlyList<AtlasPoint> Points);
 public sealed record AtlasElement(string Name, string Summary, string Description,
-    IReadOnlyList<AtlasPolygon> Polygons);
+    IReadOnlyList<AtlasPolygon> Polygons)
+{
+    public Guid? Id { get; init; }
+}
 public sealed record AtlasSpecimen(string Name, string ImagePath, string Summary,
-    string Description, CoordinateSpace CoordinateSpace, IReadOnlyList<AtlasElement> Elements);
+    string Description, CoordinateSpace CoordinateSpace, IReadOnlyList<AtlasElement> Elements)
+{
+    public Guid? MaterialId { get; init; }
+    public Guid? ImageId { get; init; }
+    public string Locale { get; init; } = "und";
+    public string? ImageIssue { get; init; }
+}
 public sealed record AtlasCatalog(IReadOnlyList<AtlasSpecimen> Specimens,
     IReadOnlyList<string> Warnings);
 

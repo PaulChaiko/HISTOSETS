@@ -1,0 +1,11 @@
+{
+  "xmlSha256": "dfa91a29756be468c23425f5d4b079a0cf8949cc4fa7e674690da0ae6ffaf685",
+  "description": "Explicit translation pairs for the accepted update1 atlas; zero-based source record indexes. Element indexes and every polygon are verified before sharing geometry.",
+  "pairs": [
+    { "key": "cornea-low", "en": 0, "ru": 7 },
+    { "key": "cornea-high", "en": 1, "ru": 6 },
+    { "key": "skin", "en": 2, "ru": 5 },
+    { "key": "bladder", "en": 3, "ru": 9 },
+    { "key": "trachea", "en": 4, "ru": 8 }
+  ]
+}
