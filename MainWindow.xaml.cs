@@ -1,261 +1,152 @@
-﻿using System;
 using System.IO;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
-using System.Xml;
+using HistOSets.Core;
+using HistOSets.Services;
+using Path = System.IO.Path;
 
+namespace HistOSets;
 
-namespace HystOSets
+public partial class MainWindow : Window
 {
-    /// <summary>
-    /// Interaction logic for MainWindow.xaml
-    /// </summary>
-    public partial class MainWindow : Window
+    private readonly string dataDirectory;
+    private AtlasCatalog? catalog;
+    private LoadedImage? image;
+    private AtlasSpecimen? CurrentSpecimen => ListOfSpecimens.SelectedItem as AtlasSpecimen;
+    private AtlasElement? CurrentElement => ListOfElements.SelectedItem as AtlasElement;
 
+    public MainWindow() : this(AppContext.BaseDirectory) { }
+
+    public MainWindow(string dataDirectory)
     {
-        string ATLAS = "ATLAS/ATLAS.xml";
-        List<string> LSpecimens = new List<string>();
-        List<string> LElements = new List<string>();
-        List<string> LPoints = new List<string>();
-        XmlDocument xDoc = new XmlDocument();
+        this.dataDirectory = Path.GetFullPath(dataDirectory);
+        InitializeComponent();
+        LoadCatalog();
+    }
 
-        List<Polygon> LPolygons = new List<Polygon>();
-
-        string CurrentSpecimen;
-        String CurrentElement;
-
-        string logFilePath = "ATLAS/L.txt";
-
-
-        public MainWindow()
+    private void LoadCatalog()
+    {
+        try
         {
-            InitializeComponent();
-
-
-
-            xDoc.Load(ATLAS);
-            XmlElement xRoot = xDoc.DocumentElement;
-            foreach (XmlElement node in xRoot) LSpecimens.Add(node.Attributes.GetNamedItem("NAME").Value.ToString());
-            foreach (string S in LSpecimens) ListOfSpecimens.Items.Add(S);
-
-
-
-
+            var next = AtlasLoader.Load(dataDirectory);
+            catalog = next;
+            ListOfSpecimens.ItemsSource = next.Specimens;
+            CatalogCount.Text = $"Записей: {next.Specimens.Count}";
+            WarningsButton.Visibility = next.Warnings.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            ListOfSpecimens.SelectedIndex = -1;
+            ResetSpecimenView();
         }
-
-        private void ListBoxItem_DoubleClick(object sender, MouseButtonEventArgs e)
+        catch (AtlasLoadException ex)
         {
+            ErrorLog.Write(ex);
+            catalog = null;
+            ListOfSpecimens.ItemsSource = null;
+            CatalogCount.Text = "Каталог недоступен";
+            WarningsButton.Visibility = Visibility.Collapsed;
+            WelcomeLogo.Visibility = Visibility.Collapsed;
+            ImageMessage.Text = "Не удалось загрузить каталог";
+            ImageMessage.Visibility = Visibility.Visible;
+            StatusText.Text = ex.Message + "\nИсправьте файл и нажмите «Обновить каталог».";
+        }
+    }
 
-            LElements.Clear();
-            CurrentElement = null;
-            AboutS.Text = null;
-            AboutE.Text = null;
-            var listBox = (ListBox)sender;
-            if (listBox.SelectedItem != null)
+    private void ResetSpecimenView()
+    {
+        ListOfElements.ItemsSource = null;
+        ClearPolygons();
+        Specimen.Source = null;
+        image = null;
+        AboutS.Text = "";
+        AboutE.Text = "";
+        SInfo.IsEnabled = EInfo.IsEnabled = PreviewButton.IsEnabled = false;
+        WelcomeLogo.Visibility = Visibility.Visible;
+        ImageMessage.Visibility = Visibility.Collapsed;
+        StatusText.Text = "Выберите препарат, затем его элемент. Для выбора достаточно одного щелчка.";
+    }
+
+    private void Specimen_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ListOfElements is null) return;
+        ResetSpecimenView();
+        var current = CurrentSpecimen;
+        if (current is null) return;
+        WelcomeLogo.Visibility = Visibility.Collapsed;
+        ImageMessage.Text = "Загрузка изображения…";
+        ImageMessage.Visibility = Visibility.Visible;
+        AboutS.Text = Fallback(current.Summary);
+        SInfo.IsEnabled = !string.IsNullOrWhiteSpace(current.Description);
+        ListOfElements.ItemsSource = current.Elements;
+        try
+        {
+            image = ImageLoader.Load(current.ImagePath);
+            Desk.Width = Specimen.Width = image.PixelWidth;
+            Desk.Height = Specimen.Height = image.PixelHeight;
+            Specimen.Source = image.Bitmap;
+            ImageMessage.Visibility = Visibility.Collapsed;
+            PreviewButton.IsEnabled = true;
+            StatusText.Text = $"{image.PixelWidth} × {image.PixelHeight} пикселей. Элементов: {current.Elements.Count}.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or FileFormatException or ArgumentException)
+        {
+            ErrorLog.Write(ex);
+            ImageMessage.Text = "Изображение недоступно";
+            StatusText.Text = $"Не удалось открыть «{Path.GetFileName(current.ImagePath)}»: {ex.Message}";
+        }
+    }
+
+    private void Element_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (Desk is null) return;
+        ClearPolygons();
+        var element = CurrentElement;
+        AboutE.Text = element is null ? "" : Fallback(element.Summary);
+        EInfo.IsEnabled = element is not null && !string.IsNullOrWhiteSpace(element.Description);
+        if (element is null || image is null || CurrentSpecimen is null) return;
+        foreach (var polygon in element.Polygons)
+        {
+            var points = polygon.Points.Select(p => ImageCoordinates.ToPixels(p, CurrentSpecimen.CoordinateSpace, image.DpiX, image.DpiY));
+            Desk.Children.Add(new Polygon
             {
-
-                CurrentSpecimen = listBox.SelectedItem.ToString();
-                LPoints.Clear();
-
-                foreach (Polygon P in LPolygons)
-                {
-                    Desk.Children.Remove(P);
-                }
-                LPolygons.Clear();
-
-
-
-                listBox = (ListBox)sender;
-                var selectedItem = listBox.SelectedItem;
-
-
-                if (selectedItem != null)
-                {
-                    string SP = selectedItem.ToString();
-                    CurrentSpecimen = SP;
-
-                    string Img = "";
-
-
-                    xDoc.Load(ATLAS);
-                    XmlElement xRoot = xDoc.DocumentElement;
-                    foreach (XmlElement node in xRoot)
-                    {
-                        if (node.Attributes.GetNamedItem("NAME").Value.ToString() == SP)
-                        {
-                            AboutS.Text = node.Attributes.GetNamedItem("INFO1").Value.ToString();
-                            Img = node.Attributes.GetNamedItem("IMAGE").Value.ToString();
-
-                            foreach (XmlElement child in node) LElements.Add(child.Attributes.GetNamedItem("NAME").Value.ToString());
-                        }
-
-                    }
-
-                    var U = new Uri($"pack://application:,,,/SPECIMENS/{Img}");
-                    var bitmap = new BitmapImage(U);
-                    Specimen.Source = bitmap;
-
-                    ListOfElements.Items.Clear();
-
-                    foreach (string S in LElements)
-                    {
-                        ListOfElements.Items.Add(S);
-                    }
-
-                    LPoints.Clear();
-
-                    foreach (Polygon P in LPolygons)
-                    {
-                        Desk.Children.Remove(P);
-                    }
-                    LPolygons.Clear();
-
-
-                }
-            }
+                Points = new PointCollection(points.Select(p => new Point(p.X, p.Y))),
+                Fill = Brushes.Aqua,
+                Opacity = 0.5,
+                IsHitTestVisible = false
+            });
         }
+        StatusText.Text = element.Polygons.Count == 0
+            ? "Для этого элемента разметка пока не добавлена."
+            : $"{element.Name} — областей: {element.Polygons.Count}.";
+    }
 
-        private void ListBoxItem_DoubleClick2(object sender, MouseButtonEventArgs e)
-        {
+    private void ClearPolygons()
+    {
+        if (Desk is null) return;
+        for (var i = Desk.Children.Count - 1; i >= 0; i--)
+            if (Desk.Children[i] is Polygon) Desk.Children.RemoveAt(i);
+    }
 
-            LPoints.Clear();
-
-            foreach (Polygon P in LPolygons)
-            {
-                Desk.Children.Remove(P);
-            }
-            LPolygons.Clear();
-
-            var listBox = (ListBox)sender;
-            var selectedItem = listBox.SelectedItem;
-
-
-            if (selectedItem != null)
-            {
-                CurrentElement = selectedItem.ToString();
-                xDoc.Load(ATLAS);
-                XmlElement xRoot = xDoc.DocumentElement;
-                foreach (XmlElement node in xRoot)
-                {
-                    if (node.Attributes.GetNamedItem("NAME").Value.ToString() == CurrentSpecimen)
-                        foreach (XmlElement child in node)
-                            if (child.Attributes.GetNamedItem("NAME").Value.ToString() == CurrentElement)
-
-                            {
-                                AboutE.Text = child.Attributes.GetNamedItem("INFO1").Value.ToString();
-                                foreach (XmlElement child2 in child) LPoints.Add(child2.Attributes.GetNamedItem("POINTS").Value.ToString());
-                            }
-                }
-
-
-                foreach (string P in LPoints)
-                {
-                    string[] Points;
-                    string[] Points2;
-                    List<string> Points3 = new List<string>();
-                    List<double> Points4 = new List<double>();
-                    Points = P.Split(" ");
-
-                    foreach (string p in Points)
-                    {
-                        Points2 = p.Split(",");
-
-                        foreach (string s in Points2) Points3.Add(s);
-
-                    }
-
-
-                    foreach (string s in Points3)
-                    {
-                        double N = Convert.ToDouble(s);
-                        Points4.Add(N);
-
-                    }
-
-                    int jj = Points4.Count();
-
-                    Polygon NewP = new Polygon();
-                    PointCollection points = new PointCollection();
-
-
-                    for (int j = 0; j < jj; j += 2)
-                    {
-                        points.Add(new Point(Points4[j], Points4[j + 1]));
-                    }
-
-                    NewP.Points = points;
-                    NewP.Fill = Brushes.Aqua;
-                    NewP.Opacity = 0.5;
-
-                    LPolygons.Add(NewP);
-
-
-                }
-
-                foreach (Polygon P in LPolygons)
-                {
-                    Grid.SetZIndex(P, 10);
-                    Desk.Children.Add(P);
-
-                }
-
-            }
-
-        }
-
-        private void Image_MouseDown(object sender, MouseButtonEventArgs e)
-        {
-            //Point clickPosition = e.GetPosition(Specimen);
-            //string coordinates = $"{clickPosition.X:F0},{clickPosition.Y:F0}";      
-            //    File.AppendAllText(logFilePath, coordinates+ " ");
-
-        }
-
-        private void SInfo_Click(object sender, RoutedEventArgs e)
-        {
-            if (CurrentSpecimen != null)
-            {
-                string info = "";
-
-                xDoc.Load(ATLAS);
-                XmlElement xRoot = xDoc.DocumentElement;
-                foreach (XmlElement node in xRoot) if (node.Attributes.GetNamedItem("NAME").Value.ToString() == CurrentSpecimen) info = node.Attributes.GetNamedItem("INFO2").Value.ToString();
-
-
-                var _info2 = new INFO2(CurrentSpecimen, info);
-                _info2.Show();
-            }
-
-        }
-
-        private void EInfo_Click(object sender, RoutedEventArgs e)
-        {
-            if (CurrentElement != null)
-            {
-                string info = "";
-
-                xDoc.Load(ATLAS);
-                XmlElement xRoot = xDoc.DocumentElement;
-                foreach (XmlElement node in xRoot)
-                {
-                    if (node.Attributes.GetNamedItem("NAME").Value.ToString() == CurrentSpecimen)
-                    {
-                        foreach (XmlNode childnode in node) if (childnode.Attributes.GetNamedItem("NAME").Value.ToString() == CurrentElement) info = childnode.Attributes.GetNamedItem("INFO2").Value.ToString();
-
-                    }
-                }
-
-                var _info2 = new INFO2(CurrentElement, info);
-                _info2.Show();
-
-            }
-
-        }
+    private static string Fallback(string text) => string.IsNullOrWhiteSpace(text) ? "Описание пока не добавлено." : text;
+    private void Reload_Click(object sender, RoutedEventArgs e) => LoadCatalog();
+    private void SInfo_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentSpecimen is { } s && SInfo.IsEnabled)
+            new INFO2(s.Name, s.Description) { Owner = this }.Show();
+    }
+    private void EInfo_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentElement is { } element && EInfo.IsEnabled)
+            new INFO2(element.Name, element.Description) { Owner = this }.Show();
+    }
+    private void Warnings_Click(object sender, RoutedEventArgs e)
+    {
+        if (catalog is not null)
+            new INFO2("Замечания к данным", string.Join("\n\n", catalog.Warnings)) { Owner = this }.Show();
+    }
+    private void Preview_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentSpecimen is { } s && image is not null)
+            new ViewerPreviewWindow(s, image, dataDirectory) { Owner = this }.Show();
     }
 }

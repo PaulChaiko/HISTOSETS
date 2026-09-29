@@ -1,77 +1,31 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
-	<PropertyGroup>
-		<OutputType>WinExe</OutputType>
-		<TargetFramework>net8.0-windows</TargetFramework>
-		<Nullable>enable</Nullable>
-		<ImplicitUsings>enable</ImplicitUsings>
-		<UseWPF>true</UseWPF>
-		<ApplicationIcon>LOGO\Icon.ico</ApplicationIcon>
-	</PropertyGroup>
-
-	<ItemGroup>
-		<None Remove="ATLAS.xml" />
-		<None Remove="L.txt" />
-		<None Remove="LOGO\BackGround1.jpg" />
-		<None Remove="LOGO\GBL.png" />
-		<None Remove="LOGO\LOGO.png" />
-		<None Remove="LOGO\LOGO2.png" />
-		<None Remove="SPECIMENS\Кожа пальца.jpg" />
-		<None Remove="SPECIMENS\Переходный эпителий.jpg" />
-		<None Remove="SPECIMENS\Рисунок3.png" />
-		<None Remove="SPECIMENS\Роговица %28малое увеличение%29.jpg" />
-		<None Remove="SPECIMENS\Роговица (большое увеличение).jpg" />
-		<None Remove="SPECIMENS\Трахея.jpg" />
-		<None Remove="SPECIMENS\Язык кролика.jpg" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<Resource Include="ATLAS\L.txt">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="LOGO\Icon.ico">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="LOGO\BackGround1.jpg">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="LOGO\GBL.png">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="LOGO\LOGO.png" />
-		<Content Include="ATLAS\ATLAS.xml">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Content>
-		<Resource Include="LOGO\LOGO2.png">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Specimen no. 14. Stratified squamous nonkeratinized epithelium, cornea.png">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Anterior corneal epithelium %28stratified squamous non-keratinized epithelium%29.png">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Кожа пальца.jpg">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Переходный эпителий.jpg">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Рисунок3.png">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Роговица %28большое увеличение%29.jpg">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Роговица (малое увеличение).jpg">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Трахея.jpg">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-		<Resource Include="SPECIMENS\Язык кролика.jpg">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</Resource>
-	</ItemGroup>
-
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>LOGO\Icon.ico</ApplicationIcon>
+    <RootNamespace>HistOSets</RootNamespace>
+    <Version>0.1.0</Version>
+    <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**;Viewer/**;artifacts/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="src\HistOSets.Core\HistOSets.Core.csproj" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
+    <Resource Include="LOGO\Icon.ico;LOGO\LOGO2.png;LOGO\GBL.png" />
+    <Content Include="ATLAS\ATLAS.xml;SPECIMENS\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Viewer\dist\**\*">
+      <Link>Viewer\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+  <Target Name="EnsureViewerAssets" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('Viewer/dist/index.html')" Text="Build viewer first: npm ci --prefix Viewer; npm run build --prefix Viewer" />
+  </Target>
 </Project>

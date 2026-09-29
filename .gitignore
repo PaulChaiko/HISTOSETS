@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+**/node_modules/
+Viewer/dist/
+artifacts/
+*.user
+*.suo
+.vs/
+TestResults/
+playwright-report/
+test-results/

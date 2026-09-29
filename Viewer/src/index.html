@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- Annotorious bundles Pixi 7, whose shaders require runtime code generation. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://media.histosets.local https://*.sample.histosets.local; connect-src 'self' https://media.histosets.local https://*.sample.histosets.local; worker-src blob:; font-src 'self'">
+  <title>HISTOSETS — просмотр изображения</title>
+  <link rel="stylesheet" href="viewer.css">
+  <script src="viewer.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="brand-row">
+      <img id="brand-logo" src="branding/LOGO2.png" alt="HISTOSETS" width="138" height="40">
+      <h1 id="title">Просмотр изображения</h1>
+    </div>
+    <div class="toolbar" aria-label="Управление изображением">
+      <button id="zoom-in" title="Приблизить" aria-label="Приблизить">+</button>
+      <button id="zoom-out" title="Отдалить" aria-label="Отдалить">−</button>
+      <button id="home">Целиком</button>
+      <label><input type="checkbox" id="overlays" checked> Контуры</label>
+      <label>Заливка <input id="opacity" type="range" min="0" max="70" value="20" aria-label="Прозрачность заливки"></label>
+    </div>
+  </header>
+  <main>
+    <section id="stage" aria-label="Изображение препарата">
+      <div id="viewer"></div>
+      <div id="message" role="status">Загрузка изображения…</div>
+    </section>
+    <aside>
+      <h2>Элементы</h2>
+      <div id="elements" aria-label="Элементы препарата"></div>
+      <p id="selection" aria-live="polite">Выберите элемент для подсветки.</p>
+      <div class="tools">
+        <h2>Пробная разметка</h2>
+        <label for="tool">Инструмент</label>
+        <select id="tool">
+          <option value="navigate">Просмотр</option>
+          <option value="rectangle">Прямоугольник</option>
+          <option value="polygon">Полигон</option>
+        </select>
+        <p id="hint">Колесо мыши — масштаб. Перетаскивание — перемещение.</p>
+        <button id="reset">Восстановить исходные контуры</button>
+        <p class="note">Пробные изменения не сохраняются. Полный редактор появится в одном из следующих обновлений.</p>
+      </div>
+    </aside>
+  </main>
+  <footer id="status" aria-live="polite">Ожидание изображения</footer>
+</body>
+</html>

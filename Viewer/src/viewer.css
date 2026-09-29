@@ -1,0 +1,33 @@
+* { box-sizing: border-box; }
+:root { --brand-purple: #b8a0e6; --brand-pink: #ffc5f5; --brand-ink: #332d40; --brand-border: #a187bd; }
+body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto 1fr auto; background: #fff url('../../LOGO/GBL.png') center / cover; color: var(--brand-ink); font: 14px/1.4 "Segoe UI", sans-serif; }
+header { padding: 14px 18px; border-bottom: 1px solid var(--brand-border); }
+.brand-row { display: flex; gap: 18px; align-items: center; margin-bottom: 10px; background: #fffffff0; padding: 6px 10px; }
+#brand-logo { object-fit: contain; flex: 0 0 auto; }
+h1 { font-size: 19px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--brand-purple); padding: 8px; }
+button, select { font: inherit; color: inherit; border: 1px solid var(--brand-border); border-radius: 5px; background: #fff; padding: 7px 11px; cursor: pointer; }
+button:hover { background: #f2e8fa; }
+button:focus-visible, select:focus-visible { outline: 3px solid #7961b2; outline-offset: 2px; }
+button:disabled, select:disabled { opacity: .5; cursor: default; }
+label { display: inline-flex; gap: 5px; align-items: center; }
+input { accent-color: #7530aa; }
+input[type=range] { width: 85px; }
+main { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 230px; }
+#stage { position: relative; min-height: 0; background: #201d29; }
+#viewer { width: 100%; height: 100%; }
+#message { position: absolute; inset: 0; display: grid; place-items: center; padding: 30px; color: #fff; background: #201d29; text-align: center; pointer-events: none; }
+#message[hidden] { display: none; }
+aside { padding: 15px; overflow-y: auto; border-left: 1px solid var(--brand-border); background: var(--brand-pink); }
+#elements { display: grid; gap: 7px; }
+#elements button { text-align: left; width: 100%; background: #ffffff9e; }
+#elements button:hover { background: #fff; }
+#elements button[aria-pressed=true] { background: var(--brand-purple); border-color: #7961b2; }
+#selection { color: #504764; }
+.tools { margin-top: 24px; padding-top: 15px; border-top: 1px solid var(--brand-border); }
+.tools select { display: block; width: 100%; margin-top: 6px; }
+.tools button { width: 100%; }
+.note, #hint { color: #655d73; font-size: 12px; }
+footer { padding: 8px 18px; font-size: 12px; border-top: 1px solid var(--brand-border); background: #ffffffee; }
+@media (max-width: 800px) { main { grid-template-columns: minmax(0, 1fr) 195px; } aside { padding: 10px; } }
