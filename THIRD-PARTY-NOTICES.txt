@@ -1,0 +1,18 @@
+HISTOSETS desktop — third-party components
+
+Microsoft.Data.Sqlite / Microsoft.Data.Sqlite.Core 10.0.12
+Copyright (c) .NET Foundation and Contributors. MIT license.
+Full text: licenses/Microsoft.Data.Sqlite.txt
+https://github.com/dotnet/efcore
+
+SQLitePCLRaw (bundle, config, core, provider) 3.0.5
+Eric Sink / SourceGear. Apache License 2.0.
+Full text: licenses/SQLitePCLRaw.txt
+https://github.com/ericsink/SQLitePCL.raw
+
+SQLite 3.53.4
+Public domain. See licenses/SQLite.txt and https://www.sqlite.org/copyright.html
+
+JavaScript viewer component notices: Viewer/THIRD-PARTY-NOTICES.txt
+Microsoft WebView2 runtime terms are supplied with the corresponding component.
+The self-contained .NET runtime includes its own LICENSE.txt and ThirdPartyNotices.txt.

@@ -8,13 +8,18 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>LOGO\Icon.ico</ApplicationIcon>
     <RootNamespace>HistOSets</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**;Viewer/**;artifacts/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="src\HistOSets.Core\HistOSets.Core.csproj" />
+    <ProjectReference Include="src\HistOSets.Storage\HistOSets.Storage.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
     <Resource Include="LOGO\Icon.ico;LOGO\LOGO2.png;LOGO\GBL.png" />
+    <Content Include="THIRD-PARTY-NOTICES.txt;licenses\*.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
     <Content Include="ATLAS\ATLAS.xml;SPECIMENS\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

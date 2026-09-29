@@ -1,0 +1,31 @@
+<Window x:Class="HistOSets.CatalogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Данные атласа — HISTOSETS" Width="720" Height="610" MinWidth="620" MinHeight="550"
+        Background="{StaticResource BrandBackgroundBrush}" FontFamily="Segoe UI" FontSize="14"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="22">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Text="Каталог HISTOSETS" FontSize="24" FontWeight="SemiBold" Foreground="#48396B"/>
+        <TextBox x:Name="LocationText" Grid.Row="1" IsReadOnly="True" TextWrapping="Wrap" Margin="0,12,0,8"/>
+        <TextBlock x:Name="StatisticsText" Grid.Row="2" TextWrapping="Wrap" Margin="0,0,0,14" Background="{StaticResource BrandSurfaceBrush}" Padding="8"/>
+        <WrapPanel x:Name="Actions" Grid.Row="3">
+            <Button x:Name="BackupButton" Content="Создать резервную копию…" Click="Backup_Click"/>
+            <Button Content="Восстановить копию…" Click="Restore_Click"/>
+            <Button Content="Открыть каталог…" Click="Open_Click"/>
+            <Button Content="Создать из XML…" Click="Create_Click"/>
+            <Button x:Name="ImportButton" Content="Повторить импорт XML…" Click="Import_Click"/>
+        </WrapPanel>
+        <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto" Margin="0,14,0,12">
+            <StackPanel>
+                <TextBlock TextWrapping="Wrap" Background="{StaticResource BrandSurfaceBrush}" Padding="12"
+                           Text="Резервная копия включает базу, изображения и исходный XML. Для восстановления выберите пустую папку: текущий каталог сохранится.&#10;&#10;Просмотр читает базу SQLite. Изменение исходного XML после импорта не меняет каталог автоматически. Повтор того же импорта не создаёт дубликатов. Для другой версии XML создайте отдельный каталог.&#10;&#10;При выборе XML рядом с его папкой ATLAS должна находиться папка SPECIMENS с изображениями. Полноценный редактор материалов пока разрабатывается."/>
+                <TextBlock x:Name="OperationStatus" TextWrapping="Wrap" Margin="0,12,0,0" Padding="12" Background="{StaticResource BrandSurfaceBrush}"/>
+            </StackPanel>
+        </ScrollViewer>
+        <Button x:Name="CloseButton" Grid.Row="5" Content="Закрыть" HorizontalAlignment="Right" IsCancel="True" MinWidth="100"/>
+    </Grid>
+</Window>

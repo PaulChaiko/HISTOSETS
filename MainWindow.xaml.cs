@@ -5,6 +5,8 @@ using System.Windows.Media;
 using System.Windows.Shapes;
 using HistOSets.Core;
 using HistOSets.Services;
+using HistOSets.Storage;
+using Microsoft.Data.Sqlite;
 using Path = System.IO.Path;
 
 namespace HistOSets;
@@ -12,17 +14,23 @@ namespace HistOSets;
 public partial class MainWindow : Window
 {
     private readonly string dataDirectory;
+    private string catalogDirectory;
+    private readonly bool rememberLocation;
+    private CatalogStore? store;
     private AtlasCatalog? catalog;
     private LoadedImage? image;
     private AtlasSpecimen? CurrentSpecimen => ListOfSpecimens.SelectedItem as AtlasSpecimen;
     private AtlasElement? CurrentElement => ListOfElements.SelectedItem as AtlasElement;
 
-    public MainWindow() : this(AppContext.BaseDirectory) { }
+    public MainWindow() : this(AppContext.BaseDirectory, CatalogLocation.Load(), true) { }
 
-    public MainWindow(string dataDirectory)
+    public MainWindow(string dataDirectory, string? catalogDirectory = null, bool rememberLocation = false)
     {
         this.dataDirectory = Path.GetFullPath(dataDirectory);
+        this.catalogDirectory = Path.GetFullPath(catalogDirectory ?? Path.Combine(dataDirectory, "Catalog"));
+        this.rememberLocation = rememberLocation;
         InitializeComponent();
+        Closed += (_, _) => store?.Dispose();
         LoadCatalog();
     }
 
@@ -30,7 +38,10 @@ public partial class MainWindow : Window
     {
         try
         {
-            var next = AtlasLoader.Load(dataDirectory);
+            store ??= new CatalogStore(catalogDirectory);
+            if (store.GetStatistics().Materials == 0)
+                store.ImportLegacy(Path.Combine(dataDirectory, "ATLAS", "ATLAS.xml"), dataDirectory, ImageLoader.ReadMetadata);
+            var next = store.Load();
             catalog = next;
             ListOfSpecimens.ItemsSource = next.Specimens;
             CatalogCount.Text = $"Записей: {next.Specimens.Count}";
@@ -38,17 +49,18 @@ public partial class MainWindow : Window
             ListOfSpecimens.SelectedIndex = -1;
             ResetSpecimenView();
         }
-        catch (AtlasLoadException ex)
+        catch (Exception ex) when (ex is CatalogStorageException or SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             ErrorLog.Write(ex);
             catalog = null;
             ListOfSpecimens.ItemsSource = null;
+            ResetSpecimenView();
             CatalogCount.Text = "Каталог недоступен";
             WarningsButton.Visibility = Visibility.Collapsed;
             WelcomeLogo.Visibility = Visibility.Collapsed;
             ImageMessage.Text = "Не удалось загрузить каталог";
             ImageMessage.Visibility = Visibility.Visible;
-            StatusText.Text = ex.Message + "\nИсправьте файл и нажмите «Обновить каталог».";
+            StatusText.Text = ex.Message + "\nКнопка «Данные атласа» позволяет открыть другой каталог или восстановить резервную копию.";
         }
     }
 
@@ -80,6 +92,7 @@ public partial class MainWindow : Window
         ListOfElements.ItemsSource = current.Elements;
         try
         {
+            if (current.ImageIssue is not null) throw new InvalidDataException(current.ImageIssue);
             image = ImageLoader.Load(current.ImagePath);
             Desk.Width = Specimen.Width = image.PixelWidth;
             Desk.Height = Specimen.Height = image.PixelHeight;
@@ -129,6 +142,27 @@ public partial class MainWindow : Window
 
     private static string Fallback(string text) => string.IsNullOrWhiteSpace(text) ? "Описание пока не добавлено." : text;
     private void Reload_Click(object sender, RoutedEventArgs e) => LoadCatalog();
+    private void Data_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new CatalogWindow(store, catalogDirectory, dataDirectory) { Owner = this };
+        dialog.ShowDialog();
+        if (dialog.SelectedCatalogDirectory is { } selected && !string.Equals(selected, catalogDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            store?.Dispose();
+            store = null;
+            catalogDirectory = selected;
+            if (rememberLocation)
+            {
+                try { CatalogLocation.Save(selected); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    ErrorLog.Write(ex);
+                    MessageBox.Show(this, "Каталог открыт, но его путь не удалось запомнить: " + ex.Message, "HISTOSETS");
+                }
+            }
+        }
+        LoadCatalog();
+    }
     private void SInfo_Click(object sender, RoutedEventArgs e)
     {
         if (CurrentSpecimen is { } s && SInfo.IsEnabled)
@@ -147,6 +181,6 @@ public partial class MainWindow : Window
     private void Preview_Click(object sender, RoutedEventArgs e)
     {
         if (CurrentSpecimen is { } s && image is not null)
-            new ViewerPreviewWindow(s, image, dataDirectory) { Owner = this }.Show();
+            new ViewerPreviewWindow(s, image, catalogDirectory) { Owner = this }.Show();
     }
 }

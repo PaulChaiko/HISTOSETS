@@ -7,9 +7,12 @@ namespace HistOSets.Core;
 public static class AtlasLoader
 {
     public static AtlasCatalog Load(string dataDirectory)
+        => LoadFile(Path.Combine(dataDirectory, "ATLAS", "ATLAS.xml"), dataDirectory);
+
+    public static AtlasCatalog LoadFile(string xmlPath, string dataDirectory)
     {
         var rootDirectory = Path.GetFullPath(dataDirectory);
-        var xmlPath = Path.Combine(rootDirectory, "ATLAS", "ATLAS.xml");
+        xmlPath = Path.GetFullPath(xmlPath);
         try
         {
             using var reader = XmlReader.Create(xmlPath, new XmlReaderSettings
