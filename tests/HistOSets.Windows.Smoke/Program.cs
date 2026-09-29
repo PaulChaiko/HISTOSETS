@@ -39,7 +39,7 @@ internal static class Program
             var image = (Image)window.FindName("Specimen");
             var canvas = (Canvas)window.FindName("Desk");
             var welcome = (Image)window.FindName("WelcomeLogo");
-            Check(specimens.Items.Count == 10, "Portable XML imports from application directory into SQLite");
+            Check(specimens.Items.Count == 10, "Portable XML imports from application directory into SQLite. Status: " + ((TextBlock)window.FindName("StatusText")).Text);
             Check(File.Exists(System.IO.Path.Combine(catalogRoot, "catalog.sqlite")), "SQLite database created in the chosen writable directory");
             var legacy = AtlasLoader.Load(AppContext.BaseDirectory);
             Check(specimens.SelectedIndex == -1 && image.Source is null && welcome.Source is not null && welcome.IsVisible,
@@ -160,11 +160,25 @@ internal static class Program
         catch (Exception ex)
         {
             Console.Error.WriteLine(ex);
+            if (Application.Current is { } current)
+            {
+                foreach (Window open in current.Windows)
+                    if (open is MainWindow)
+                    {
+                        Console.Error.WriteLine(((TextBlock)open.FindName("StatusText")).Text);
+                        SaveScreenshot(open, System.IO.Path.Combine(output, "native-failure.png"));
+                    }
+            }
+            var logs = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HISTOSETS", "Logs");
+            if (Directory.Exists(logs))
+                foreach (var log in Directory.GetFiles(logs)) Console.Error.WriteLine(File.ReadAllText(log));
             return 1;
         }
         finally
         {
             Environment.CurrentDirectory = previousDirectory;
+            if (Application.Current is { } current)
+                foreach (var open in current.Windows.Cast<Window>().ToArray()) open.Close();
             Directory.Delete(temp, true);
         }
     }
