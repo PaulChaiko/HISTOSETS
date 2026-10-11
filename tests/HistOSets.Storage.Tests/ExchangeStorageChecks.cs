@@ -332,22 +332,22 @@ internal static class ExchangeStorageChecks
     {
         var root = Path.Combine(folder, "ActualSchema4"); CatalogStore.RestoreBackup(backup, root); var db = Path.Combine(root, "catalog.sqlite");
         Sql(db, File.ReadAllText(Path.Combine(source, "src", "HistOSets.Storage", "Migrations", "004_compound_geometry.sql")) +
-            "DROP TABLE exchange_baselines; DELETE FROM schema_migrations WHERE version>4; PRAGMA user_version=4;");
+            "DROP TABLE training_prompt_translations; DROP TABLE training_prompts; DROP TABLE exchange_baselines; DELETE FROM schema_migrations WHERE version>4; PRAGMA user_version=4;");
         var rows = BusinessRows(db); var catalogId = Sql(db, "SELECT catalog_id FROM catalog_metadata;"); var revision = Sql(db, "SELECT content_revision FROM catalog_metadata;");
         string before;
         using (var store = new CatalogStore(root))
         {
-            if (store.GetMetadata().FormatVersion != 5 || (long)Sql(db, "SELECT COUNT(*) FROM schema_migrations;")! != 5 ||
+            if (store.GetMetadata().FormatVersion != 6 || (long)Sql(db, "SELECT COUNT(*) FROM schema_migrations;")! != 6 ||
                 (long)Sql(db, "SELECT COUNT(*) FROM exchange_baselines;")! != 0 || BusinessRows(db) != rows ||
                 !Equals(catalogId, Sql(db, "SELECT catalog_id FROM catalog_metadata;")) || !Equals(revision, Sql(db, "SELECT content_revision FROM catalog_metadata;")))
-                throw new Exception("Schema4-to-5 migration lost content or identity");
+                throw new Exception("Schema4-to-6 migration lost content or identity");
             before = store.LastMigrationBackupPath!;
-            if (!Path.GetFileName(before).StartsWith("before-schema5-")) throw new Exception("Missing named schema5 migration backup");
+            if (!Path.GetFileName(before).StartsWith("before-schema6-")) throw new Exception("Missing named schema6 migration backup");
         }
-        Console.WriteLine("PASS Actual schema4 upgrades once to schema5 with an empty exchange ledger and byte-exact business rows");
+        Console.WriteLine("PASS Actual schema4 upgrades once to schema6 with an empty exchange ledger and byte-exact business rows");
         var restored = Path.Combine(folder, "OriginalSchema4"); CatalogStore.RestoreBackup(before, restored); var restoredDb = Path.Combine(restored, "catalog.sqlite");
-        if ((long)Sql(restoredDb, "PRAGMA user_version;")! != 4 || BusinessRows(restoredDb) != rows) throw new Exception("Pre-schema5 backup did not restore real schema4");
-        Console.WriteLine("PASS Pre-schema5 backup restores the original schema4 metadata, images and business records");
+        if ((long)Sql(restoredDb, "PRAGMA user_version;")! != 4 || BusinessRows(restoredDb) != rows) throw new Exception("Pre-schema6 backup did not restore real schema4");
+        Console.WriteLine("PASS Pre-schema6 backup restores the original schema4 metadata, images and business records");
         Sql(restoredDb, "CREATE TRIGGER fail_schema5 BEFORE INSERT ON schema_migrations WHEN NEW.version=5 BEGIN SELECT RAISE(ABORT,'schema5 failure'); END;");
         var hash = Hash(restoredDb);
         try { using var rejected = new CatalogStore(restored); throw new Exception("Expected schema5 migration failure"); } catch (CatalogStorageException) { }

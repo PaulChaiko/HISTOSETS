@@ -77,7 +77,7 @@ public sealed partial class CatalogStore
                 if (files.Count > ExchangePackage.MaxFiles + 1 || files.Any(f => f.Size <= 0 || f.Size > ExchangePackage.MaxBytes) ||
                     files.Aggregate(0L, (sum, f) => checked(sum + f.Size)) > ExchangePackage.MaxBytes)
                     throw new CatalogStorageException("Выбранные изображения превышают предел пакета 64 ГиБ.");
-                var manifest = new ExchangePackage.ExchangeManifest(1, Guid.NewGuid().ToString(), metadata.Id.ToString(), metadata.Name,
+                var manifest = new ExchangePackage.ExchangeManifest(2, Guid.NewGuid().ToString(), metadata.Id.ToString(), metadata.Name,
                     metadata.ContentRevision, StorageFiles.UtcNow(), files);
                 using (var archive = ZipFile.Open(partial, ZipArchiveMode.Create))
                 {
@@ -138,6 +138,8 @@ public sealed partial class CatalogStore
             ["elements"] = "material_id IN " + selected,
             ["regions"] = "material_id IN " + selected,
             ["material_tags"] = "material_id IN " + selected,
+            ["training_prompts"] = "material_id IN " + selected,
+            ["training_prompt_translations"] = "prompt_id IN (SELECT id FROM training_prompts WHERE material_id IN " + selected + ")",
             ["element_translations"] = "element_id IN (SELECT id FROM elements WHERE material_id IN " + selected + ")",
             ["images"] = "id IN (SELECT image_id FROM material_images WHERE material_id IN " + selected + ")",
             ["image_calibrations"] = "material_image_id IN (SELECT id FROM material_images WHERE material_id IN " + selected + ")",

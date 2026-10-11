@@ -15,12 +15,14 @@ public sealed class MaterialDraft
     public Dictionary<string, MaterialTextDraft> Texts { get; set; } = new() { ["ru"] = new(), ["en"] = new() };
     public List<MaterialImageDraft> Images { get; set; } = [];
     public List<MaterialElementDraft> Elements { get; set; } = [];
+    public List<TrainingPromptDraft> TrainingPrompts { get; set; } = [];
     public HashSet<Guid> TagIds { get; set; } = [];
     public MaterialDraft Clone() => new()
     {
         Id = Id, Revision = Revision, Kind = Kind, Status = Status, AuthorCredit = AuthorCredit, RightsCredit = RightsCredit,
         AnalogGroupId = AnalogGroupId, Texts = Texts.ToDictionary(p => p.Key, p => p.Value.Clone()),
-        Images = Images.Select(i => i.Clone()).ToList(), Elements = Elements.Select(e => e.Clone()).ToList(), TagIds = [.. TagIds]
+        Images = Images.Select(i => i.Clone()).ToList(), Elements = Elements.Select(e => e.Clone()).ToList(),
+        TrainingPrompts = TrainingPrompts.Select(p => p.Clone()).ToList(), TagIds = [.. TagIds]
     };
 }
 
@@ -50,7 +52,18 @@ public sealed class MaterialElementDraft
     public Guid Id { get; set; } = Guid.NewGuid();
     public Dictionary<string, MaterialTextDraft> Texts { get; set; } = new() { ["ru"] = new(), ["en"] = new() };
     public List<MaterialRegionDraft> Regions { get; set; } = [];
-    public MaterialElementDraft Clone() => new() { Id = Id, Texts = Texts.ToDictionary(p => p.Key, p => p.Value.Clone()), Regions = Regions.Select(r => r.Clone()).ToList() };
+    public List<TrainingPromptDraft> TrainingPrompts { get; set; } = [];
+    public MaterialElementDraft Clone() => new() { Id = Id, Texts = Texts.ToDictionary(p => p.Key, p => p.Value.Clone()),
+        Regions = Regions.Select(r => r.Clone()).ToList(), TrainingPrompts = TrainingPrompts.Select(p => p.Clone()).ToList() };
+}
+
+/// <summary>One independent learning-description variant; ordinary atlas descriptions remain separate.</summary>
+public sealed class TrainingPromptDraft
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public bool IsEnabled { get; set; } = true;
+    public Dictionary<string, string> Texts { get; set; } = new() { ["ru"] = "", ["en"] = "" };
+    public TrainingPromptDraft Clone() => new() { Id = Id, IsEnabled = IsEnabled, Texts = new(Texts) };
 }
 
 public sealed class MaterialRegionDraft

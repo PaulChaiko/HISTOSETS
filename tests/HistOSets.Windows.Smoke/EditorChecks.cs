@@ -187,6 +187,7 @@ internal static partial class Program
             finally
             {
                 if (dialog is EditorWindow editor && dialog.IsVisible) CloseEditorForCleanup(editor);
+                else if (dialog is TrainingPromptWindow training && dialog.IsVisible) CloseTrainingPromptForCleanup(training);
                 else if (dialog.IsVisible)
                 {
                     if (dialog is EditorCatalogWindow chooser)

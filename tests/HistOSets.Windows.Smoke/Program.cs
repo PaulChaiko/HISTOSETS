@@ -215,13 +215,14 @@ internal static partial class Program
             Check(((TextBlock)home.FindName("CatalogName")).Text == "Пустая учебная база"
                 && ((TextBlock)home.FindName("CatalogStatistics")).Text == "Объектов: 0",
                 "A newly created empty catalog opens without importing demonstration objects");
-            Check(((Button)home.FindName("EditButton")).IsEnabled && !((Button)home.FindName("SelfTestButton")).IsEnabled,
-                "Selected empty database enables the object editor while self-test remains unavailable");
+            Check(((Button)home.FindName("EditButton")).IsEnabled && ((Button)home.FindName("SelfTestButton")).IsEnabled,
+                "Selected empty database enables the editor and the training preparation screen");
             var edited = CheckEditorWorkflow(home, selected.ImagePath, output);
             home.Close();
             CheckSavedEditorObject(emptyRoot, output, edited);
             CheckAdvancedEditorWorkflow(temp, output);
             CheckExchangeWorkflow(temp, output);
+            CheckTrainingWorkflow(temp, output);
 
             var backupPath = System.IO.Path.Combine(temp, "native-backup.histosets");
             Guid topicId;

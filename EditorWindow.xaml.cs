@@ -258,6 +258,8 @@ public partial class EditorWindow : Window
         RemoveImageButton.IsEnabled = SelectedImage is not null;
         CalibrationButton.IsEnabled = SelectedImage?.Metadata is not null;
         DeleteElementButton.IsEnabled = SelectedElement is not null;
+        MaterialTrainingSummary.Text = TrainingSummary(draft.TrainingPrompts);
+        ElementTrainingSummary.Text = SelectedElement is { } promptElement ? TrainingSummary(promptElement.TrainingPrompts) : "";
         DeleteRegionButton.IsEnabled = Surface.SelectedRegionId is not null && !Surface.HasPendingOperation;
         FinishPolygonButton.IsEnabled = Surface.HasPendingPolygon;
         CancelPolygonButton.IsEnabled = Surface.HasPendingOperation;
@@ -436,6 +438,38 @@ public partial class EditorWindow : Window
         Change(() => { var element = new MaterialElementDraft(); draft.Elements.Add(element); selectedElementId = element.Id; });
         FormTabs.SelectedItem = ElementsTab;
         ElementRuName.Focus();
+    }
+
+    private static string TrainingSummary(IReadOnlyCollection<TrainingPromptDraft> prompts)
+    {
+        var ru = prompts.Count(p => p.IsEnabled && !string.IsNullOrWhiteSpace(p.Texts.GetValueOrDefault("ru")));
+        var en = prompts.Count(p => p.IsEnabled && !string.IsNullOrWhiteSpace(p.Texts.GetValueOrDefault("en")));
+        return T($"Учебных вариантов: {prompts.Count}. Включено с текстом: RU — {ru}, EN — {en}. Необязательны для готовности карточки.",
+            $"Training variants: {prompts.Count}. Enabled with text: RU — {ru}, EN — {en}. Optional for card readiness.");
+    }
+
+    private void MaterialTraining_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ResolvePending()) return;
+        FlushFields();
+        var label = Text(draft.Texts, UiLanguage.Locale).Name;
+        var dialog = new TrainingPromptWindow(draft.TrainingPrompts, label, isElement: false) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+        Change(() => draft.TrainingPrompts = dialog.Prompts.Select(p => p.Clone()).ToList(), render: false);
+        SetStatus("Учебные описания объекта применены к рабочей копии. Сохраните карточку, чтобы записать изменения.",
+            "Object training descriptions applied to the working copy. Save the card to store the changes.");
+    }
+
+    private void ElementTraining_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedElement is not { } element || !ResolvePending()) return;
+        FlushFields();
+        var label = Text(element.Texts, UiLanguage.Locale).Name;
+        var dialog = new TrainingPromptWindow(element.TrainingPrompts, label, isElement: true) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+        Change(() => element.TrainingPrompts = dialog.Prompts.Select(p => p.Clone()).ToList(), render: false);
+        SetStatus("Учебные описания выбранного элемента применены к рабочей копии. Сохраните карточку, чтобы записать изменения.",
+            "Training descriptions for the selected element applied to the working copy. Save the card to store the changes.");
     }
 
     private void DeleteElement_Click(object sender, RoutedEventArgs e)
@@ -762,6 +796,8 @@ public partial class EditorWindow : Window
         ObjectTab.Header = T("Объект", "Object"); ElementsTab.Header = T("Элементы", "Elements"); MetadataTab.Header = T("Метаданные", "Metadata");
         MaterialHelp.Text = T("Черновик допускает неполные данные. Для готовности заполните все поля RU и EN, добавьте основное изображение и описания элементов.",
             "Drafts may be incomplete. To mark an object ready, fill all RU and EN fields, add a primary image and complete element descriptions.");
+        MaterialTrainingButton.Content = T("Учебные описания объекта…", "Object training descriptions…");
+        ElementTrainingButton.Content = T("Учебные описания элемента…", "Element training descriptions…");
         foreach (var label in new[] { MaterialRuNameLabel, MaterialEnNameLabel, ElementRuNameLabel, ElementEnNameLabel }) label.Text = T("Название", "Name");
         foreach (var label in new[] { MaterialRuSummaryLabel, MaterialEnSummaryLabel, ElementRuSummaryLabel, ElementEnSummaryLabel }) label.Text = T("Краткое описание", "Summary");
         foreach (var label in new[] { MaterialRuDescriptionLabel, MaterialEnDescriptionLabel, ElementRuDescriptionLabel, ElementEnDescriptionLabel }) label.Text = T("Подробное описание", "Full description");

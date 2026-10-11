@@ -69,6 +69,8 @@
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="8">
                             <TextBlock x:Name="MaterialHelp" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                            <Button x:Name="MaterialTrainingButton" Click="MaterialTraining_Click" HorizontalAlignment="Left" Margin="0,0,0,5"/>
+                            <TextBlock x:Name="MaterialTrainingSummary" TextWrapping="Wrap" Foreground="#555555" Margin="0,0,0,10"/>
                             <GroupBox Header="RU" Background="#EDE5FB" Margin="0,0,0,10">
                                 <StackPanel Margin="7">
                                     <TextBlock x:Name="MaterialRuNameLabel"/><TextBox x:Name="MaterialRuName" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
@@ -95,6 +97,8 @@
                         </StackPanel>
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel x:Name="ElementFields">
+                                <Button x:Name="ElementTrainingButton" Click="ElementTraining_Click" HorizontalAlignment="Left" Margin="0,0,0,5"/>
+                                <TextBlock x:Name="ElementTrainingSummary" TextWrapping="Wrap" Foreground="#555555" Margin="0,0,0,10"/>
                                 <GroupBox Header="RU" Background="#FFF0FC" Margin="0,0,0,10"><StackPanel Margin="7">
                                     <TextBlock x:Name="ElementRuNameLabel"/><TextBox x:Name="ElementRuName" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
                                     <TextBlock x:Name="ElementRuSummaryLabel" Margin="0,7,0,0"/><TextBox x:Name="ElementRuSummary" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" MaxHeight="150" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>

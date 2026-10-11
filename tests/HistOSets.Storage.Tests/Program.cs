@@ -81,7 +81,7 @@ try
         var dbHash = Hash(store.DatabasePath);
         Check(store.ImportLegacy(sourceXml, source, Metadata).AlreadyImported && Hash(store.DatabasePath) == dbHash, "Identical import is a byte-for-byte database no-op");
         Reject<CatalogStorageException>(() => { using var duplicate = new CatalogStore(root); }, "Second application cannot own the same catalog");
-        Check(Convert.ToInt64(Sql(store.DatabasePath, "SELECT COUNT(*) FROM schema_migrations;")) == 5, "All five schema migrations recorded once");
+        Check(Convert.ToInt64(Sql(store.DatabasePath, "SELECT COUNT(*) FROM schema_migrations;")) == 6, "All six schema migrations recorded once");
         Check(Convert.ToInt64(Sql(store.DatabasePath, "PRAGMA foreign_keys;")) == 1, "Foreign keys enforced");
         Reject<SqliteException>(() => Sql(store.DatabasePath, "UPDATE regions SET material_id = (SELECT id FROM materials WHERE id <> regions.material_id LIMIT 1);"), "A region cannot cross material boundaries");
         var changed = Path.Combine(temp, "changed.xml");
@@ -236,7 +236,7 @@ try
         var sameNames = new AtlasCatalog([data.Specimens[0] with { Name = "Same" }, data.Specimens[1] with { Name = "Same" }], []);
         Check(CatalogBrowser.Filter(sameNames, "ru", "", [], CatalogTaxonomy.Empty).Count == 2, "Equal material titles do not merge UUIDs");
         var hashBeforeOpening = Hash(store.DatabasePath);
-        Check(store.LoadTaxonomy().Tags.Count == 0 && Hash(store.DatabasePath) == hashBeforeOpening && Convert.ToInt64(Sql(store.DatabasePath, "PRAGMA user_version;")) == 5, "Schema5 reads are a no-op and system types do not invent tag values");
+        Check(store.LoadTaxonomy().Tags.Count == 0 && Hash(store.DatabasePath) == hashBeforeOpening && Convert.ToInt64(Sql(store.DatabasePath, "PRAGMA user_version;")) == 6, "Schema6 reads are a no-op and system types do not invent tag values");
 
         groupId = store.LoadTaxonomy().Groups.Single(g => g.Code == "topic").Id;
         var purpose = store.LoadTaxonomy().Groups.Single(g => g.Code == "purpose").Id;
@@ -293,6 +293,7 @@ try
     count += EditorChecks.Run(source, backup, temp, Metadata);
     count += MeasurementStorageChecks.Run(source, backup, temp, Metadata);
     count += ExchangeStorageChecks.Run(source, backup, temp, Metadata);
+    count += TrainingStorageChecks.Run(source, backup, temp, Metadata);
     Console.WriteLine($"{count} storage checks passed.");
 }
 finally { Directory.Delete(temp, true); }

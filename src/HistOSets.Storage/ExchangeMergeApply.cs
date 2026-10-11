@@ -32,14 +32,14 @@ public sealed partial class CatalogStore
                 var local=ReadExchangeTables(connection,null);
                 var locals=ExchangeEntities(local).ToDictionary(e=>e.Key,StringComparer.Ordinal);
                 var changed=preview.Items.Where(i=>resolutions[i.Key]==ExchangeResolution.UseIncoming &&
-                    (!locals.TryGetValue(i.Key,out var old) || ExchangeEntityFingerprint(old,local)!=ExchangeEntityFingerprint(incoming[i.Key],package.Tables)))
+                    (!locals.TryGetValue(i.Key,out var old) || !ExchangeContentsEqual(old,local,incoming[i.Key],package)))
                     .Select(i=>i.Key).ToHashSet(StringComparer.Ordinal);
                 var baselines=ReadExchangeBaselines(connection,null,package.SourceCatalogId.ToString());
                 // Keeping a divergent local choice does not create a false common ancestor.
                 // Otherwise a later source-only edit could silently replace the changes just retained.
                 var acknowledge=preview.Items.Where(i=>resolutions[i.Key]==ExchangeResolution.UseIncoming ||
                     resolutions[i.Key]==ExchangeResolution.KeepLocal && locals.TryGetValue(i.Key,out var old) &&
-                    ExchangeEntityFingerprint(old,local)==ExchangeEntityFingerprint(incoming[i.Key],package.Tables)).ToArray();
+                    ExchangeContentsEqual(old,local,incoming[i.Key],package)).ToArray();
                 var added=changed.Count(k=>!locals.ContainsKey(k) && incoming[k].Root.String("deleted_utc") is null);
                 var deleted=changed.Count(k=>incoming[k].Root.String("deleted_utc") is not null);
                 var updated=changed.Count-added-deleted;
@@ -64,7 +64,7 @@ public sealed partial class CatalogStore
                     PrepareExchangeImage(connection,transaction,package,image,mappings,installed,now);
 
                 foreach(var entity in selected)
-                    ApplyExchangeEntity(connection,transaction,entity,mappings,now);
+                    ApplyExchangeEntity(connection,transaction,entity,mappings,now,package.FormatVersion==1);
                 RequireExchangeActiveReferences(connection,transaction);
                 var readyBefore=Convert.ToInt32(Scalar(connection,"SELECT COUNT(*) FROM materials WHERE status='ready' AND deleted_utc IS NULL;",transaction));
                 DemoteIncompleteMaterials(connection,transaction,now);
@@ -176,7 +176,7 @@ public sealed partial class CatalogStore
     }
 
     private static void ApplyExchangeEntity(SqliteConnection connection,SqliteTransaction transaction,ExchangeEntity entity,
-        Dictionary<(string Table,string Id),string> mappings,string now)
+        Dictionary<(string Table,string Id),string> mappings,string now,bool preserveTraining)
     {
         var table=ExchangeRootTable(entity.Kind);
         var oldRevision=Scalar(connection,$"SELECT revision FROM {table} WHERE id=$id;",transaction,("$id",entity.Root.Id));
@@ -197,10 +197,25 @@ public sealed partial class CatalogStore
         var current=ExchangeEntities(after).Single(e=>e.Key==entity.Key);
         foreach(var (rowTable,rows) in current.Rows.Where(p=>p.Key!=table))
         {
+            // An update6 package cannot express an intentional removal of training descriptions.
+            // Keep those rows byte-for-byte unless their material/element owner is being deleted.
+            if (preserveTraining && ExchangeSchema.IsTrainingTable(rowTable) && entity.Root.String("deleted_utc") is null) continue;
             var retained=entity.Rows[rowTable].Select(r=>mappings.GetValueOrDefault((rowTable,r.Id),r.Id)).ToHashSet(StringComparer.Ordinal);
             foreach(var row in rows)
                 if(row.String("deleted_utc") is null && (entity.Root.String("deleted_utc") is not null || !retained.Contains(row.Id)))
                     Execute(connection,$"UPDATE {rowTable} SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE id=$id;",transaction,("$now",now),("$id",row.Id));
+        }
+        if (entity.Kind == ExchangeEntityKind.Material && preserveTraining)
+        {
+            Execute(connection,"""
+                UPDATE training_prompts SET deleted_utc=$now,modified_utc=$now,revision=revision+1
+                WHERE material_id=$id AND deleted_utc IS NULL AND
+                  (EXISTS(SELECT 1 FROM materials m WHERE m.id=training_prompts.material_id AND m.deleted_utc IS NOT NULL) OR
+                   EXISTS(SELECT 1 FROM elements e WHERE e.id=training_prompts.element_id AND e.deleted_utc IS NOT NULL));
+                UPDATE training_prompt_translations SET deleted_utc=$now,modified_utc=$now,revision=revision+1
+                WHERE deleted_utc IS NULL AND prompt_id IN
+                  (SELECT id FROM training_prompts WHERE material_id=$id AND deleted_utc IS NOT NULL);
+                """,transaction,("$now",now),("$id",entity.Root.Id));
         }
         if(oldRevision is not null)
             Execute(connection,$"UPDATE {table} SET revision=$revision,modified_utc=$now WHERE id=$id;",transaction,
@@ -219,6 +234,7 @@ public sealed partial class CatalogStore
         (string Parent,string Value)? naturalKey=table switch
         {
             "material_translations"=>("material_id","locale"), "element_translations"=>("element_id","locale"),
+            "training_prompt_translations"=>("prompt_id","locale"),
             "tag_group_translations"=>("group_id","locale"), "tag_translations"=>("tag_id","locale"),
             "analog_group_translations"=>("group_id","locale"), "material_images"=>("material_id","image_id"),
             "material_tags"=>("material_id","tag_id"), _=>null
@@ -249,11 +265,13 @@ public sealed partial class CatalogStore
         {
             string? owner=table switch
             {
-                "material_translations" or "material_images" or "elements" or "regions" or "material_tags"=>"material_id",
+                "material_translations" or "material_images" or "elements" or "regions" or "material_tags" or "training_prompts"=>"material_id",
                 "element_translations"=>"element_id", "tag_group_translations" or "analog_group_translations"=>"group_id",
-                "tag_translations"=>"tag_id", "image_calibrations"=>"material_image_id", _=>null
+                "tag_translations"=>"tag_id", "image_calibrations"=>"material_image_id", "training_prompt_translations"=>"prompt_id", _=>null
             };
             if(owner is not null && !Equals(previous.Values[owner],values[owner]))
+                throw new CatalogStorageException("UUID дочерней записи принадлежит другому объекту. Обмен остановлен: "+incoming.Id);
+            if (table == "training_prompts" && !Equals(previous.Values["element_id"], values["element_id"]))
                 throw new CatalogStorageException("UUID дочерней записи принадлежит другому объекту. Обмен остановлен: "+incoming.Id);
             if(table=="material_images" && !Equals(previous.Values["image_id"],values["image_id"]))
                 throw new CatalogStorageException("Существующее изображение объекта нельзя подменять другим оригиналом.");
@@ -282,7 +300,11 @@ public sealed partial class CatalogStore
               (SELECT COUNT(*) FROM tags t JOIN tag_groups g ON g.id=t.group_id WHERE t.deleted_utc IS NULL AND g.deleted_utc IS NOT NULL) +
               (SELECT COUNT(*) FROM material_images mi JOIN materials m ON m.id=mi.material_id JOIN images i ON i.id=mi.image_id WHERE mi.deleted_utc IS NULL AND m.deleted_utc IS NULL AND i.deleted_utc IS NOT NULL) +
               (SELECT COUNT(*) FROM regions r JOIN elements e ON e.id=r.element_id JOIN material_images mi ON mi.id=r.material_image_id
-               WHERE r.deleted_utc IS NULL AND (e.deleted_utc IS NOT NULL OR mi.deleted_utc IS NOT NULL));
+               WHERE r.deleted_utc IS NULL AND (e.deleted_utc IS NOT NULL OR mi.deleted_utc IS NOT NULL)) +
+              (SELECT COUNT(*) FROM training_prompts p JOIN materials m ON m.id=p.material_id LEFT JOIN elements e ON e.id=p.element_id
+               WHERE p.deleted_utc IS NULL AND (m.deleted_utc IS NOT NULL OR e.deleted_utc IS NOT NULL)) +
+              (SELECT COUNT(*) FROM training_prompt_translations t JOIN training_prompts p ON p.id=t.prompt_id
+               WHERE t.deleted_utc IS NULL AND p.deleted_utc IS NOT NULL);
             """,transaction));
         if(invalid!=0) throw new CatalogStorageException("Решения оставляют ссылки на удалённые записи. Сохраните используемые справочники или измените решения по связанным объектам.");
     }

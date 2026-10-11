@@ -61,8 +61,9 @@ public sealed partial class CatalogStore
             locals.TryGetValue(entity.Key,out var previous);
             var incomingHash = ExchangeEntityFingerprint(entity,package.Tables);
             var localHash = previous is null ? null : ExchangeEntityFingerprint(previous,local);
+            var divergentAncestor = false;
             ExchangeChangeKind status;
-            if (localHash == incomingHash) status = ExchangeChangeKind.Unchanged;
+            if (localHash == incomingHash || package.FormatVersion == 1 && previous is not null && ExchangeContentsEqual(previous, local, entity, package)) status = ExchangeChangeKind.Unchanged;
             else if (entity.Root.String("deleted_utc") is not null) status = ExchangeChangeKind.Deletion;
             else if (previous is null) status = ExchangeChangeKind.Add;
             else if (!baselines.TryGetValue(entity.Key,out var baseline)) status = ExchangeChangeKind.Conflict;
@@ -73,16 +74,27 @@ public sealed partial class CatalogStore
                 // A content change at an old/equal source revision is never a safe fast-forward.
                 // Fingerprints still decide equality and divergence; counters only veto a stale update.
                 var staleSource = entity.Root.Integer("revision") <= baseline.SourceRevision;
-                status = sourceChanged ? (localChanged || staleSource ? ExchangeChangeKind.Conflict : ExchangeChangeKind.Update) : ExchangeChangeKind.LocalChanged;
+                // A legacy import can preserve local descriptions absent from its source graph.
+                // A later format2 package must not treat that divergent state as consent to erase them.
+                divergentAncestor = entity.Kind == ExchangeEntityKind.Material && package.FormatVersion >= 2 &&
+                    baseline.SourceFingerprint != baseline.LocalFingerprint;
+                status = sourceChanged ? (localChanged || staleSource || divergentAncestor ? ExchangeChangeKind.Conflict : ExchangeChangeKind.Update) : ExchangeChangeKind.LocalChanged;
             }
             var affected = entity.Kind == ExchangeEntityKind.Material ? 0 : ExchangeAffectedMaterials(local,entity).Count;
             var warning = "";
+            if (divergentAncestor && status == ExchangeChangeKind.Conflict)
+                warning = T("После предыдущего обмена содержимое карточки различалось между каталогами. Новый пакет требует явного решения; проверьте сохранённые учебные описания перед заменой.",
+                    "The catalogs retained different card contents after the previous exchange. The new package requires an explicit choice; review retained training descriptions before replacing the card.");
             if (entity.Kind != ExchangeEntityKind.Material && status is not (ExchangeChangeKind.Unchanged or ExchangeChangeKind.LocalChanged) && affected > 0)
                 warning = T($"Общая запись используется в {affected} объектах. Замена изменит их метаданные; неполные готовые объекты станут черновиками.",
                     $"This shared entry is used by {affected} objects. Replacing it changes their metadata; incomplete ready objects become drafts.");
             if (status == ExchangeChangeKind.Deletion)
                 warning += (warning.Length == 0 ? "" : " ") + T("Пакет содержит удаление. Оно применяется только после явного выбора; используемый справочник удалить нельзя.",
                     "The package contains a deletion. It requires an explicit choice; a shared entry still in use cannot be deleted.");
+            if (entity.Kind == ExchangeEntityKind.Material && package.FormatVersion == 1)
+                warning += (warning.Length == 0 ? "" : " ") + T(
+                    "Пакет формата 1 не содержит учебных описаний. Описания сохранятся у остающихся объектов и элементов; удаление владельца удалит и его описания.",
+                    "Format 1 packages do not contain training descriptions. Descriptions of retained objects and elements are preserved; deleting an owner also deletes its descriptions.");
             var resolution = status switch
             {
                 ExchangeChangeKind.Conflict or ExchangeChangeKind.Deletion => ExchangeResolution.Unresolved,
@@ -90,7 +102,7 @@ public sealed partial class CatalogStore
                 _ => ExchangeResolution.KeepLocal
             };
             // Shared names/types affect cards beyond the selected graph and always need an explicit decision.
-            if (warning.Length > 0 && resolution == ExchangeResolution.UseIncoming) resolution = ExchangeResolution.Unresolved;
+            if (entity.Kind != ExchangeEntityKind.Material && warning.Length > 0 && resolution == ExchangeResolution.UseIncoming) resolution = ExchangeResolution.Unresolved;
             var name = ExchangeEntityName(entity,locale);
             items.Add(new(entity.Key,entity.Kind,Guid.Parse(entity.Root.Id),name,status,
                 previous is null ? T("Запись отсутствует.","The entry does not exist.") : ExchangeEntitySummary(previous,local,locale),
@@ -157,9 +169,10 @@ public sealed partial class CatalogStore
                 switch(kind)
                 {
                     case ExchangeEntityKind.Material:
-                        foreach(var table in new[]{"material_translations","material_images","elements","regions","material_tags"}) Add(table,"material_id",roots);
+                        foreach(var table in new[]{"material_translations","material_images","elements","regions","material_tags","training_prompts"}) Add(table,"material_id",roots);
                         Add("element_translations","element_id",rows["elements"].Select(r=>r.Id).ToHashSet(StringComparer.Ordinal));
                         Add("image_calibrations","material_image_id",rows["material_images"].Select(r=>r.Id).ToHashSet(StringComparer.Ordinal));
+                        Add("training_prompt_translations","prompt_id",rows["training_prompts"].Select(r=>r.Id).ToHashSet(StringComparer.Ordinal));
                         break;
                     case ExchangeEntityKind.TagGroup: Add("tag_group_translations","group_id",roots); break;
                     case ExchangeEntityKind.Tag: Add("tag_translations","tag_id",roots); break;
@@ -170,7 +183,11 @@ public sealed partial class CatalogStore
         return result;
     }
 
-    private static string ExchangeEntityFingerprint(ExchangeEntity entity,IReadOnlyDictionary<string,IReadOnlyList<ExchangeRow>> tables)
+    private static bool ExchangeContentsEqual(ExchangeEntity local, IReadOnlyDictionary<string,IReadOnlyList<ExchangeRow>> localTables,
+        ExchangeEntity incoming, ExchangePackage package) =>
+        ExchangeEntityFingerprint(local, localTables, package.FormatVersion >= 2) == ExchangeEntityFingerprint(incoming, package.Tables, package.FormatVersion >= 2);
+
+    private static string ExchangeEntityFingerprint(ExchangeEntity entity,IReadOnlyDictionary<string,IReadOnlyList<ExchangeRow>> tables, bool includeTraining = true)
     {
         if(entity.Root.String("deleted_utc") is not null) return ExchangeHash(new[]{entity.Key,"deleted"});
         var images = tables["images"].ToDictionary(r=>r.Id,StringComparer.Ordinal);
@@ -178,6 +195,8 @@ public sealed partial class CatalogStore
         var parts = new List<object>();
         foreach(var (table,rows) in entity.Rows.OrderBy(p=>p.Key,StringComparer.Ordinal))
         {
+            // Empty training tables retain update6 baseline hashes. Legacy packages cannot express changes to these fields.
+            if (ExchangeSchema.IsTrainingTable(table) && (!includeTraining || rows.All(r => r.String("deleted_utc") is not null))) continue;
             var normalized = new List<string>();
             foreach(var row in rows.Where(r=>r.String("deleted_utc") is null))
             {
@@ -210,7 +229,7 @@ public sealed partial class CatalogStore
 
     private static string ExchangeEntityName(ExchangeEntity entity,string locale="ru")
     {
-        var translations=entity.Rows.Where(p=>p.Key.EndsWith("_translations",StringComparison.Ordinal) && p.Key!="element_translations").SelectMany(p=>p.Value)
+        var translations=entity.Rows.Where(p=>p.Key.EndsWith("_translations",StringComparison.Ordinal) && p.Key is not ("element_translations" or "training_prompt_translations")).SelectMany(p=>p.Value)
             .OrderBy(r=>r.String("deleted_utc") is null?0:1).ToArray();
         var name=translations.FirstOrDefault(r=>r.String("locale")==locale)?.String("name") ?? translations.FirstOrDefault(r=>r.String("locale")=="ru")?.String("name")
             ?? translations.FirstOrDefault(r=>r.String("locale")=="en")?.String("name") ?? translations.FirstOrDefault()?.String("name");
@@ -224,7 +243,7 @@ public sealed partial class CatalogStore
         var root=entity.Root;
         var parts=new List<string>{"UUID: "+root.Id,T("Редакция: ","Revision: ")+root.Integer("revision"),
             root.String("deleted_utc") is null ? T("Действует","Active") : T("Удалено","Deleted")};
-        foreach(var (table,rows) in entity.Rows.Where(p=>p.Key.EndsWith("_translations",StringComparison.Ordinal) && p.Key!="element_translations"))
+        foreach(var (table,rows) in entity.Rows.Where(p=>p.Key.EndsWith("_translations",StringComparison.Ordinal) && p.Key is not ("element_translations" or "training_prompt_translations")))
             foreach(var row in rows.Where(r=>root.String("deleted_utc") is not null || r.String("deleted_utc") is null).OrderBy(r=>r.String("locale"),StringComparer.Ordinal))
             {
                 parts.Add((row.String("locale")??"").ToUpperInvariant()+": "+row.String("name"));
@@ -235,6 +254,15 @@ public sealed partial class CatalogStore
             int Count(string table)=>entity.Rows[table].Count(r=>r.String("deleted_utc") is null);
             parts.Add(T($"Состояние: {root.String("status")}; изображений: {Count("material_images")}; элементов: {Count("elements")}; областей: {Count("regions")}; калибровок: {Count("image_calibrations")}; тегов: {Count("material_tags")}",
                 $"Status: {root.String("status")}; images: {Count("material_images")}; elements: {Count("elements")}; regions: {Count("regions")}; calibrations: {Count("image_calibrations")}; tags: {Count("material_tags")}"));
+            parts.Add(T("Учебных описаний: ", "Training descriptions: ") + Count("training_prompts"));
+            foreach (var prompt in entity.Rows["training_prompts"].Where(r => r.String("deleted_utc") is null).OrderBy(r => r.Integer("sort_order")).ThenBy(r => r.Id, StringComparer.Ordinal))
+            {
+                parts.Add(T("Учебное описание: ", "Training description: ") + prompt.Id +
+                    (prompt.String("element_id") is { } owner ? T(" · элемент ", " · element ") + owner : T(" · объект", " · object")) +
+                    (prompt.Integer("is_enabled") == 1 ? T(" · включено", " · enabled") : T(" · выключено", " · disabled")));
+                foreach (var translation in entity.Rows["training_prompt_translations"].Where(r => r.String("prompt_id") == prompt.Id && r.String("deleted_utc") is null).OrderBy(r => r.String("locale"), StringComparer.Ordinal))
+                    parts.Add((translation.String("locale") ?? "").ToUpperInvariant() + ": " + translation.String("text"));
+            }
             parts.Add(T("Автор: ","Author: ")+root.String("author_credit"));
             parts.Add(T("Права: ","Rights: ")+root.String("rights_credit"));
             string Label(string translationTable,string parent,string id)

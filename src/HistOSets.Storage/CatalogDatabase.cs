@@ -7,7 +7,7 @@ namespace HistOSets.Storage;
 internal static class CatalogDatabase
 {
     internal const int ApplicationId = 0x48535453; // HSTS
-    internal const int Version = 5;
+    internal const int Version = 6;
 
     internal static SqliteConnection Open(string path, SqliteOpenMode mode = SqliteOpenMode.ReadOnly)
     {
@@ -38,6 +38,7 @@ internal static class CatalogDatabase
         ApplyVersion3(connection, transaction);
         ApplyVersion4(connection, transaction);
         ApplyVersion5(connection, transaction);
+        ApplyVersion6(connection, transaction);
         Validate(connection, transaction: transaction);
         transaction.Commit();
     }
@@ -84,7 +85,7 @@ internal static class CatalogDatabase
         var appId = Convert.ToInt64(Scalar(connection, "PRAGMA application_id;", transaction));
         if (appId != ApplicationId) throw new CatalogStorageException("Выбранный файл не является базой HISTOSETS.");
         var version = Convert.ToInt64(Scalar(connection, "PRAGMA user_version;", transaction));
-        if (version != Version && !(allowLegacy && version is 1 or 2 or 3 or 4))
+        if (version != Version && !(allowLegacy && version is 1 or 2 or 3 or 4 or 5))
             throw new CatalogStorageException($"Версия базы {version} не поддерживается этой сборкой (ожидается {Version}). Файл не изменён.");
         if (!Equals(Scalar(connection, "PRAGMA quick_check;", transaction), "ok"))
             throw new CatalogStorageException("Нарушена целостность SQLite. Восстановите резервную копию в другой каталог.");
@@ -103,7 +104,8 @@ internal static class CatalogDatabase
             UNION ALL SELECT id FROM material_images UNION ALL SELECT id FROM tag_groups
             UNION ALL SELECT id FROM tag_group_translations UNION ALL SELECT id FROM tags
             UNION ALL SELECT id FROM tag_translations UNION ALL SELECT id FROM material_tags
-            """ + (version >= 2 ? " UNION ALL SELECT id FROM analog_groups UNION ALL SELECT id FROM analog_group_translations UNION ALL SELECT id FROM image_calibrations;" : ";"), transaction))
+            """ + (version >= 2 ? " UNION ALL SELECT id FROM analog_groups UNION ALL SELECT id FROM analog_group_translations UNION ALL SELECT id FROM image_calibrations" : "")
+                 + (version >= 6 ? " UNION ALL SELECT id FROM training_prompts UNION ALL SELECT id FROM training_prompt_translations;" : ";"), transaction))
         using (var reader = command.ExecuteReader())
             while (reader.Read())
                 if (!Guid.TryParseExact(reader.GetString(0), "D", out _))
@@ -144,6 +146,16 @@ internal static class CatalogDatabase
                     !reader.GetString(2).All(Uri.IsHexDigit) || !reader.GetString(3).All(Uri.IsHexDigit))
                     throw new CatalogStorageException("Повреждена история обмена каталогами.");
         }
+        if (version >= 6 && Convert.ToInt64(Scalar(connection, """
+            SELECT
+              (SELECT COUNT(*) FROM training_prompts p JOIN materials m ON m.id=p.material_id
+               LEFT JOIN elements e ON e.id=p.element_id
+               WHERE p.deleted_utc IS NULL AND (m.deleted_utc IS NOT NULL OR
+                   (p.element_id IS NOT NULL AND (e.id IS NULL OR e.deleted_utc IS NOT NULL))))
+              + (SELECT COUNT(*) FROM training_prompt_translations t JOIN training_prompts p ON p.id=t.prompt_id
+                 WHERE t.deleted_utc IS NULL AND p.deleted_utc IS NOT NULL);
+            """, transaction)) != 0)
+            throw new CatalogStorageException("Учебное описание ссылается на удалённый объект или элемент.");
     }
 
     internal static void ApplyVersion3(SqliteConnection connection, SqliteTransaction transaction)
@@ -187,6 +199,13 @@ internal static class CatalogDatabase
     {
         Execute(connection, Resource("Migrations.005_catalog_exchange.sql"), transaction);
         Execute(connection, "INSERT INTO schema_migrations VALUES(5,$now); PRAGMA user_version=5;", transaction,
+            ("$now", StorageFiles.UtcNow()));
+    }
+
+    internal static void ApplyVersion6(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        Execute(connection, Resource("Migrations.006_training_preparation.sql"), transaction);
+        Execute(connection, "INSERT INTO schema_migrations VALUES(6,$now); PRAGMA user_version=6;", transaction,
             ("$now", StorageFiles.UtcNow()));
     }
 
