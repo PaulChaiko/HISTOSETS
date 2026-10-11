@@ -368,7 +368,13 @@ internal static partial class Program
         + string.Join("\n", VisualChildren<TextBlock>(session).Where(t => t.IsVisible).Select(t => t.Text));
 
     private static string SessionCatalogBytes(string root) => string.Join("\n", Directory.GetFiles(root, "*", SearchOption.AllDirectories)
-        .Order(StringComparer.Ordinal).Select(path => Path.GetRelativePath(root, path) + ":" + HashExchangeFile(path)));
+        .Order(StringComparer.Ordinal).Select(path =>
+        {
+            var relative = Path.GetRelativePath(root, path);
+            // CatalogStore owns this runtime lock with FileShare.None. Keep its presence in the
+            // inventory, but hash every other file, including SQLite, images and metadata.
+            return relative + ":" + (relative == "catalog.lock" ? "<exclusive runtime lock>" : HashExchangeFile(path));
+        }));
 
     private static void CreateSessionImage(string path, int width, int height, int variant)
     {
