@@ -7,7 +7,7 @@ namespace HistOSets.Storage;
 internal static class CatalogDatabase
 {
     internal const int ApplicationId = 0x48535453; // HSTS
-    internal const int Version = 4;
+    internal const int Version = 5;
 
     internal static SqliteConnection Open(string path, SqliteOpenMode mode = SqliteOpenMode.ReadOnly)
     {
@@ -37,6 +37,7 @@ internal static class CatalogDatabase
         ApplyVersion2(connection, transaction, name);
         ApplyVersion3(connection, transaction);
         ApplyVersion4(connection, transaction);
+        ApplyVersion5(connection, transaction);
         Validate(connection, transaction: transaction);
         transaction.Commit();
     }
@@ -83,7 +84,7 @@ internal static class CatalogDatabase
         var appId = Convert.ToInt64(Scalar(connection, "PRAGMA application_id;", transaction));
         if (appId != ApplicationId) throw new CatalogStorageException("Выбранный файл не является базой HISTOSETS.");
         var version = Convert.ToInt64(Scalar(connection, "PRAGMA user_version;", transaction));
-        if (version != Version && !(allowLegacy && version is 1 or 2 or 3))
+        if (version != Version && !(allowLegacy && version is 1 or 2 or 3 or 4))
             throw new CatalogStorageException($"Версия базы {version} не поддерживается этой сборкой (ожидается {Version}). Файл не изменён.");
         if (!Equals(Scalar(connection, "PRAGMA quick_check;", transaction), "ok"))
             throw new CatalogStorageException("Нарушена целостность SQLite. Восстановите резервную копию в другой каталог.");
@@ -134,6 +135,15 @@ internal static class CatalogDatabase
             using var reader = command.ExecuteReader();
             while (reader.Read()) CatalogStore.CalibrationFromReader(reader);
         }
+        if (version >= 5)
+        {
+            using var command = Command(connection, "SELECT source_catalog_id,entity_id,source_fingerprint,local_fingerprint FROM exchange_baselines;", transaction);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                if (!Guid.TryParseExact(reader.GetString(0), "D", out _) || !Guid.TryParseExact(reader.GetString(1), "D", out _) ||
+                    !reader.GetString(2).All(Uri.IsHexDigit) || !reader.GetString(3).All(Uri.IsHexDigit))
+                    throw new CatalogStorageException("Повреждена история обмена каталогами.");
+        }
     }
 
     internal static void ApplyVersion3(SqliteConnection connection, SqliteTransaction transaction)
@@ -170,6 +180,13 @@ internal static class CatalogDatabase
         // simplify or reserialize scientific contours and their revision history.
         Execute(connection, Resource("Migrations.004_compound_geometry.sql"), transaction);
         Execute(connection, "INSERT INTO schema_migrations VALUES(4,$now); PRAGMA user_version=4;", transaction,
+            ("$now", StorageFiles.UtcNow()));
+    }
+
+    internal static void ApplyVersion5(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        Execute(connection, Resource("Migrations.005_catalog_exchange.sql"), transaction);
+        Execute(connection, "INSERT INTO schema_migrations VALUES(5,$now); PRAGMA user_version=5;", transaction,
             ("$now", StorageFiles.UtcNow()));
     }
 

@@ -115,8 +115,8 @@ internal static class MeasurementStorageChecks
         using(var restored=new CatalogStore(restoredRoot))
         {
             var draft=restored.LoadMaterialDraft(materialId);
-            Check(restored.GetMetadata().FormatVersion==4 && restored.LastMigrationBackupPath is null && draft.Images[0].Calibration==persisted &&
-                RegionGeometryCodec.Serialize(draft.Elements[0].Regions[0].Geometry)==compoundJson,"Schema4 backup preserves compound holes, calibration, source values and geometry exactly");
+            Check(restored.GetMetadata().FormatVersion==5 && restored.LastMigrationBackupPath is null && draft.Images[0].Calibration==persisted &&
+                RegionGeometryCodec.Serialize(draft.Elements[0].Regions[0].Geometry)==compoundJson,"Schema5 backup preserves compound holes, calibration, source values and geometry exactly");
             restored.DeleteMaterial(draft.Id,draft.Revision);
             Check((long)Sql(restored.DatabasePath,"SELECT COUNT(*) FROM image_calibrations WHERE deleted_utc IS NULL;")! ==0,"Deleting a material soft-deletes its active calibration");
         }
@@ -142,26 +142,26 @@ internal static class MeasurementStorageChecks
         string oldBackup;
         using(var upgraded=new CatalogStore(schema3))
         {
-            Check(upgraded.GetMetadata().FormatVersion==4 && (long)Sql(database,"SELECT COUNT(*) FROM schema_migrations;")! ==4,"Real schema3 migrates to schema4 exactly once");
+            Check(upgraded.GetMetadata().FormatVersion==5 && (long)Sql(database,"SELECT COUNT(*) FROM schema_migrations;")! ==5,"Real schema3 migrates to schema5 exactly once");
             Check(Snapshot(database,"regions")==regions,"Schema3 migration preserves every JSON byte, region UUID, revision, provenance and deletion marker");
             Check(Snapshot(database,"image_calibrations")==calibrations,"Schema3 migration preserves active and historical calibration rows exactly");
             oldBackup=upgraded.LastMigrationBackupPath!;
-            Check(Path.GetFileName(oldBackup).StartsWith("before-schema4-",StringComparison.Ordinal),"Schema4 migration exposes an explicitly named pre-upgrade recovery archive");
+            Check(Path.GetFileName(oldBackup).StartsWith("before-schema5-",StringComparison.Ordinal),"Schema5 migration exposes an explicitly named pre-upgrade recovery archive");
         }
         var oldRestored=Path.Combine(temp,"RestoreOriginalSchema3"); CatalogStore.RestoreBackup(oldBackup,oldRestored);
         var oldDb=Path.Combine(oldRestored,"catalog.sqlite");
         Check((long)Sql(oldDb,"PRAGMA user_version;")! ==3 && Snapshot(oldDb,"regions")==regions && Snapshot(oldDb,"image_calibrations")==calibrations,
-            "Pre-schema4 backup restores actual schema3 and all its scientific data before opening");
+            "Pre-schema5 backup restores actual schema3 and all its scientific data before opening");
         using(var upgraded=new CatalogStore(oldRestored)) Check(Snapshot(oldDb,"regions")==regions && Snapshot(oldDb,"image_calibrations")==calibrations,
             "Restored schema3 backup migrates again without changing any scientific row");
-        using(var reopened=new CatalogStore(schema3)) Check(reopened.LastMigrationBackupPath is null,"Opening current schema4 never creates a redundant migration backup");
+        using(var reopened=new CatalogStore(schema3)) Check(reopened.LastMigrationBackupPath is null,"Opening current schema5 never creates a redundant migration backup");
 
         var failed=MakeSchema3(source,baselineBackup,Path.Combine(temp,"FailSchema4")); var failedDb=Path.Combine(failed,"catalog.sqlite");
         Sql(failedDb,"CREATE TRIGGER fail_schema4 BEFORE INSERT ON schema_migrations WHEN NEW.version=4 BEGIN SELECT RAISE(ABORT,'final migration write failed'); END;");
         var failedHash=Hash(failedDb);
         Reject(()=> { using var rejected=new CatalogStore(failed); },"Schema4 migration reports failure after table copies and renames");
         Check(Hash(failedDb)==failedHash && (long)Sql(failedDb,"PRAGMA user_version;")! ==3,"Failed schema4 migration restores byte-identical original tables, indexes, JSON and metadata");
-        Check(Directory.GetFiles(Path.Combine(failed,"BACKUPS"),"before-schema4-*.histosets").Length==1,"A complete old schema3 archive remains available after migration rollback");
+        Check(Directory.GetFiles(Path.Combine(failed,"BACKUPS"),"before-schema5-*.histosets").Length==1,"A complete old schema3 archive remains available after migration rollback");
         return count;
     }
 
@@ -176,6 +176,7 @@ internal static class MeasurementStorageChecks
             ALTER TABLE regions_v3 RENAME TO regions;
             CREATE INDEX ix_regions_element ON regions(element_id,sort_order);
             CREATE INDEX ix_regions_image ON regions(material_image_id);
+            DROP TABLE exchange_baselines;
             DELETE FROM schema_migrations WHERE version>3;
             PRAGMA user_version=3;
             """);

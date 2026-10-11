@@ -58,9 +58,10 @@ public partial class HomeWindow : Window
         ViewButton.Content = T("Просмотр", "View");
         SelfTestButton.Content = T("Самопроверка — в следующих обновлениях", "Self-test — coming in later updates");
         EditButton.Content = T("Редактирование", "Edit");
+        ExchangeButton.Content = T("Обмен материалами…", "Exchange materials…");
         ManageButton.Content = T("Управление базой и резервные копии…", "Database management and backups…");
         DemoButton.Content = T("Создать учебную демонстрационную базу…", "Create demonstration database…");
-        VersionLabel.Text = T("Интерактивный атлас · update5.3 · 0.5.3", "Interactive atlas · update5.3 · 0.5.3");
+        VersionLabel.Text = T("Интерактивный атлас · update6 · 0.6.0", "Interactive atlas · update6 · 0.6.0");
         LanguageButton.ToolTip = T("Переключить интерфейс и данные на английский", "Switch interface and content to Russian");
         if (statusFactory is not null) StatusText.Text = statusFactory();
         RefreshSummary();
@@ -69,7 +70,7 @@ public partial class HomeWindow : Window
     private static string T(string ru, string en) => UiLanguage.T(ru, en);
     private void RefreshSummary()
     {
-        ViewButton.IsEnabled = EditButton.IsEnabled = store is not null;
+        ViewButton.IsEnabled = EditButton.IsEnabled = ExchangeButton.IsEnabled = store is not null;
         DemoButton.Visibility = store is null ? Visibility.Visible : Visibility.Collapsed;
         if (store is null)
         {
@@ -236,6 +237,13 @@ public partial class HomeWindow : Window
         dialog.ShowDialog();
         if (dialog.SelectedCatalogDirectory is { } selected) await OpenExisting(selected);
         else RefreshSummary();
+    }
+    private void Exchange_Click(object sender, RoutedEventArgs e)
+    {
+        if (store is null || busy) return;
+        try { new ExchangeWindow(store) { Owner = this }.ShowDialog(); }
+        catch (Exception ex) { ShowError(ex); }
+        RefreshSummary();
     }
     private void Language_Click(object sender, RoutedEventArgs e)
     {

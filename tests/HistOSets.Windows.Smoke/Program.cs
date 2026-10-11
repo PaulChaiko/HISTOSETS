@@ -221,6 +221,7 @@ internal static partial class Program
             home.Close();
             CheckSavedEditorObject(emptyRoot, output, edited);
             CheckAdvancedEditorWorkflow(temp, output);
+            CheckExchangeWorkflow(temp, output);
 
             var backupPath = System.IO.Path.Combine(temp, "native-backup.histosets");
             Guid topicId;
