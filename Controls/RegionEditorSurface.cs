@@ -35,6 +35,10 @@ public sealed class RegionEditorSurface : FrameworkElement
     private BitmapSource? image;
     private double imageWidth, imageHeight;
     private IReadOnlyList<AtlasRegion> regions = Array.Empty<AtlasRegion>();
+    private IReadOnlyList<AtlasRegion> referenceRegions = Array.Empty<AtlasRegion>();
+    private bool showRegions = true, showReferenceRegions = true, editingLocked;
+    private Brush? regionFillBrush, regionStrokeBrush, selectedFillBrush, selectedStrokeBrush;
+    private Brush? referenceFillBrush, referenceStrokeBrush;
     private Guid? selectedRegionId;
     private RegionEditorTool tool = RegionEditorTool.Select;
     private bool canEdit = true;
@@ -118,12 +122,39 @@ public sealed class RegionEditorSurface : FrameworkElement
         get => regions;
         set
         {
+            if (editingLocked) return;
             CancelPendingOperation();
             regions = new ReadOnlyCollection<AtlasRegion>((value ?? Array.Empty<AtlasRegion>()).ToArray());
             if (selectedRegionId is not null && !regions.Any(region => region.Id == selectedRegionId))
                 SelectRegion(null);
             InvalidateVisual();
         }
+    }
+
+    /// <summary>Display-only comparison geometry. It is never hit-tested, selected, or edited.</summary>
+    public IReadOnlyList<AtlasRegion> ReferenceRegions
+    {
+        get => referenceRegions;
+        set
+        {
+            referenceRegions = new ReadOnlyCollection<AtlasRegion>((value ?? Array.Empty<AtlasRegion>()).ToArray());
+            InvalidateVisual();
+        }
+    }
+    public bool ShowRegions { get => showRegions; set { showRegions = value; InvalidateVisual(); } }
+    public bool ShowReferenceRegions { get => showReferenceRegions; set { showReferenceRegions = value; InvalidateVisual(); } }
+    public Brush RegionFillBrush { get => regionFillBrush ?? RegionFill; set { regionFillBrush = value; InvalidateVisual(); } }
+    public Brush RegionStrokeBrush { get => regionStrokeBrush ?? RegionStroke; set { regionStrokeBrush = value; InvalidateVisual(); } }
+    public Brush SelectedFillBrush { get => selectedFillBrush ?? SelectedFill; set { selectedFillBrush = value; InvalidateVisual(); } }
+    public Brush SelectedStrokeBrush { get => selectedStrokeBrush ?? SelectedStroke; set { selectedStrokeBrush = value; InvalidateVisual(); } }
+    public Brush ReferenceFillBrush { get => referenceFillBrush ?? Brushes.Transparent; set { referenceFillBrush = value; InvalidateVisual(); } }
+    public Brush ReferenceStrokeBrush { get => referenceStrokeBrush ?? Brushes.Orange; set { referenceStrokeBrush = value; InvalidateVisual(); } }
+
+    /// <summary>An owner may freeze an accepted learner response while leaving pan and zoom usable.</summary>
+    internal void SetEditingLock(bool value)
+    {
+        editingLocked = value;
+        if (value) CanEdit = false;
     }
 
     public Guid? SelectedRegionId { get => selectedRegionId; set => SelectRegion(value); }
@@ -142,7 +173,7 @@ public sealed class RegionEditorSurface : FrameworkElement
     public bool CanEdit
     {
         get => canEdit;
-        set { if (canEdit == value) return; CancelPendingOperation(); canEdit = value; UpdateCursor(); InvalidateVisual(); }
+        set { if ((editingLocked && value) || canEdit == value) return; CancelPendingOperation(); canEdit = value; UpdateCursor(); InvalidateVisual(); }
     }
     /// <summary>The radius of brush and eraser in original image pixels, independent of zoom.</summary>
     public double BrushRadius
@@ -380,12 +411,16 @@ public sealed class RegionEditorSurface : FrameworkElement
         context.PushClip(new RectangleGeometry(new Rect(RenderSize)));
         context.PushTransform(new MatrixTransform(zoom, 0, 0, zoom, offset.X, offset.Y));
         context.DrawImage(image, new Rect(0, 0, ImageWidth, ImageHeight));
-        foreach (var region in regions)
+        foreach (var region in showRegions ? regions : Array.Empty<AtlasRegion>())
         {
             if (original?.Id == region.Id && (preview is not null || gesture == Gesture.Stroke)) continue;
             var selected = region.Id == selectedRegionId;
-            DrawRegion(context, region.Geometry, selected ? SelectedFill : RegionFill, selected ? SelectedStroke : RegionStroke);
+            DrawRegion(context, region.Geometry, selected ? SelectedFillBrush : RegionFillBrush, selected ? SelectedStrokeBrush : RegionStrokeBrush);
         }
+        if (showReferenceRegions)
+            foreach (var region in referenceRegions)
+                context.DrawGeometry(ReferenceFillBrush,
+                    new Pen(ReferenceStrokeBrush, 2 / zoom) { DashStyle = DashStyles.Dash }, ToDrawingGeometry(region.Geometry));
         if (preview is not null) DrawRegion(context, preview, PreviewFill, PreviewStroke);
         if (polygon.Count > 0)
         {
@@ -400,14 +435,14 @@ public sealed class RegionEditorSurface : FrameworkElement
             foreach (var point in polygon) context.DrawEllipse(PreviewStroke, null, ToPoint(point), 3 / zoom, 3 / zoom);
         }
         context.Pop();
-        if (canEdit && tool == RegionEditorTool.Select)
+        if (canEdit && showRegions && tool == RegionEditorTool.Select)
         {
             var geometry = preview ?? regions.FirstOrDefault(region => region.Id == selectedRegionId)?.Geometry;
             if (geometry is not null)
                 foreach (var point in Handles(geometry))
                 {
                     var viewport = ImageToViewport(point);
-                    context.DrawRectangle(Brushes.White, new Pen(SelectedStroke, 1.5),
+                    context.DrawRectangle(Brushes.White, new Pen(SelectedStrokeBrush, 1.5),
                         new Rect(viewport.X - 4, viewport.Y - 4, 8, 8));
                 }
         }

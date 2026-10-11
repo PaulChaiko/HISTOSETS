@@ -8,7 +8,8 @@ public enum TrainingIssueCode
 {
     MissingMaterial, MissingName, MissingAnalogName, AmbiguousName, AmbiguousImage, NoUsableImage, NoElements,
     NoVisibleRegions, RegionOutsideImage, InsufficientImageChoices, NoDescription, DisabledDescription,
-    MissingDescriptionTranslation, AnswerInDescription, AmbiguousDescription, DuplicateDescription
+    MissingDescriptionTranslation, AnswerInDescription, AmbiguousDescription, DuplicateDescription,
+    RegionComparisonUnavailable
 }
 
 internal static class TrainingFrozen

@@ -131,6 +131,13 @@ internal static class TrainingPlannerChecks
             [TrainingMethod.TraceElement]), TrainingIssueCode.NoVisibleRegions),
             "Training: bounding box overlap without filled visible area is correctly excluded");
         var descriptionElementOnly = Material(1, "", elements: [element]);
+        var overComplexElement = new TrainingElement(Id(404), Ru("Клеточный пласт"), 0,
+            Enumerable.Range(0, RegionComparison.MaxRegions + 1).Select(index =>
+                new TrainingRegion(Id(10000 + index), Id(101), RegionGeometry.Rectangle(10, 10, 20, 20))), []);
+        var overComplexPlan = Plan(Catalog([Material(1, "Кожа", [Image(101, "sha-a")], [overComplexElement])]),
+            [a.Id], [TrainingMethod.TraceElement, TrainingMethod.NameElementDescription]);
+        check(overComplexPlan.QuestionCount == 0 && Has(overComplexPlan, TrainingIssueCode.RegionComparisonUnavailable),
+            "Training: references beyond comparison limits are excluded during preparation instead of failing session launch");
         check(Plan(Catalog([descriptionElementOnly]), [a.Id], [TrainingMethod.NameElementDescription]).QuestionCount == 1,
             "Training: element description needs neither image nor object title");
         var methods = new[] { TrainingMethod.NameObjectImage, TrainingMethod.ChooseImage };

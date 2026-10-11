@@ -224,6 +224,7 @@ internal static partial class Program
             CheckExchangeWorkflow(temp, output);
             CheckTrainingWorkflow(temp, output);
             CheckTrainingSessions(temp, output);
+            CheckTraceTrainingSessions(temp, output);
 
             var backupPath = System.IO.Path.Combine(temp, "native-backup.histosets");
             Guid topicId;
