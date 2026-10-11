@@ -193,14 +193,25 @@ internal static partial class Program
         Check(state.Results.Count == 0 && !((Button)session.FindName("CheckAnswerButton")).IsEnabled,
             "Editing a selected answer invalidates its identity; stale typed text cannot silently submit the previous choice");
         var wrong = state.CurrentAnswers.First(a => a.Key != first.Answer.Key);
-        session.SelectAnswer(wrong.Key); session.CheckAnswer();
+        var originalHeight = session.Height;
+        session.Height = Math.Min(originalHeight, 650); Pump();
+        session.SelectAnswer(wrong.Key); session.CheckAnswer(); Pump();
         Check(state.CurrentResult?.Outcome == TrainingOutcome.Incorrect
             && ((TextBlock)session.FindName("FeedbackText")).Text.Contains(first.Answer.Name, StringComparison.Ordinal),
             "A submitted wrong choice produces explicit feedback and only then reveals the correct canonical name");
         session.CheckAnswer();
         Check(state.Results.Count == 1 && !((Button)session.FindName("CheckAnswerButton")).IsEnabled,
             "Repeated submission cannot record a second answer or change an already checked result");
+        var scroll = (ScrollViewer)session.FindName("ContentScroll");
+        var viewport = (FrameworkElement?)scroll.Template.FindName("PART_ScrollContentPresenter", scroll)
+            ?? throw new Exception("The feedback scroll viewport was not found");
+        var feedback = (FrameworkElement)session.FindName("FeedbackPanel");
+        var feedbackBounds = feedback.TransformToAncestor(viewport).TransformBounds(new Rect(feedback.RenderSize));
+        Check(feedback.IsVisible && feedbackBounds.Top >= -1 && feedbackBounds.Bottom <= viewport.ActualHeight + 1
+            && feedbackBounds.Left >= -1 && feedbackBounds.Right <= viewport.ActualWidth + 1,
+            "Checked-answer feedback scrolls fully into the visible viewport even in a short session window");
         SaveScreenshot(session, Path.Combine(output, "native-session-feedback-ru.png"));
+        session.Height = originalHeight; Pump();
         CompleteSessionTask(session, session.NextAsync());
         var choicesQuestion = state.CurrentQuestion!;
         Check(choicesQuestion.Method == TrainingMethod.ChooseImage

@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using HistOSets.Controls;
 using HistOSets.Core;
 using HistOSets.Services;
@@ -368,8 +369,11 @@ public partial class TrainingSessionWindow : Window
         });
         RefreshCommands();
         var request = generation;
-        Dispatcher.BeginInvoke(new Action(() =>
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
         {
+            if (!IsCurrent(request) || Session.IsFinished || Session.CurrentResult is null) return;
+            // Measure the newly visible feedback before requesting its scroll position.
+            ContentScroll.UpdateLayout();
             if (IsCurrent(request) && !Session.IsFinished && Session.CurrentResult is not null)
                 FeedbackPanel.BringIntoView();
         }));
