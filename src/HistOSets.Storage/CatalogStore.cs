@@ -48,7 +48,7 @@ public sealed partial class CatalogStore : IDisposable
             {
                 var backups = Path.Combine(RootDirectory, "BACKUPS");
                 Directory.CreateDirectory(backups);
-                var path = Path.Combine(backups, "before-schema4-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".histosets");
+                var path = Path.Combine(backups, "before-schema5-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".histosets");
                 // This snapshot must contain every referenced file before the first database write.
                 CreateBackup(path);
                 LastMigrationBackupPath = path;
@@ -58,7 +58,8 @@ public sealed partial class CatalogStore : IDisposable
                     using var transaction = connection.BeginTransaction();
                     if (version == 1) ApplyVersion2(connection, transaction, DefaultCatalogName(RootDirectory));
                     if (version < 3) ApplyVersion3(connection, transaction);
-                    ApplyVersion4(connection, transaction);
+                    if (version < 4) ApplyVersion4(connection, transaction);
+                    ApplyVersion5(connection, transaction);
                     Validate(connection, transaction: transaction);
                     transaction.Commit();
                 }

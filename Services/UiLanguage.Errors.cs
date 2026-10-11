@@ -12,6 +12,12 @@ internal static partial class UiLanguage
     internal static string Message(string message)
     {
         if (Locale != "en") return message;
+        const string exchangePrefix = "Пакет обмена: ";
+        if (message.StartsWith(exchangePrefix, StringComparison.Ordinal))
+            return "Exchange package: " + Message(message[exchangePrefix.Length..]);
+        const string exchangeFailure = "Не удалось применить обмен. Изменения базы отменены.\n";
+        if (message.StartsWith(exchangeFailure, StringComparison.Ordinal))
+            return "The exchange could not be applied. Database changes have been rolled back.\n" + Message(message[exchangeFailure.Length..]);
         const string readinessPrefix = "Объект пока не готов:\n";
         if (message.StartsWith(readinessPrefix, StringComparison.Ordinal))
             return "The object is not ready yet:\n" + string.Join("\n", message[readinessPrefix.Length..].Split('\n').Select(ReadinessIssue));
@@ -59,6 +65,64 @@ internal static partial class UiLanguage
 
     private static readonly (string Russian, string English)[] ErrorMessages =
     [
+        ("Выберите от 1 до 100 000 объектов для экспорта.", "Select between 1 and 100,000 objects to export."),
+        ("Файл уже существует. Выберите новое имя пакета обмена.", "The file already exists. Choose a new exchange package name."),
+        ("Выбранный объект больше не существует. Обновите список экспорта.", "A selected object no longer exists. Refresh the export list."),
+        ("В выбранных объектах слишком много записей для одного пакета.", "The selected objects contain too many records for one package."),
+        ("Описания выбранных объектов превышают предел пакета 128 МиБ.", "The selected object descriptions exceed the 128 MiB package limit."),
+        ("Выбранные изображения превышают предел пакета 64 ГиБ.", "The selected images exceed the 64 GiB package limit."),
+        ("Повторяющиеся пути или превышен предел числа файлов.", "Duplicate paths or too many files."),
+        ("Отсутствует manifest.json.", "manifest.json is missing."),
+        ("Недопустимый размер manifest.json.", "Invalid manifest.json size."),
+        ("Есть незаявленные файлы.", "The archive contains unlisted files."),
+        ("Отсутствует заявленный файл.", "A listed file is missing."),
+        ("Размер файла не совпадает с манифестом.", "A file size does not match the manifest."),
+        ("Файл повреждён или имеет неподдерживаемую структуру.", "The file is damaged or has an unsupported structure."),
+        ("Данные предварительного просмотра изменились. Откройте пакет заново.", "The preview data has changed. Reopen the package."),
+        ("Параметры исходного изображения не совпадают с описанием. Контуры могут сместиться.", "The original image does not match its metadata. Regions could be misplaced."),
+        ("Калибровка не соответствует физическим размерам исходного изображения.", "The calibration does not match the original image's physical dimensions."),
+        ("Неподдерживаемая версия или неверные сведения о каталоге.", "Unsupported version or invalid catalog metadata."),
+        ("Превышен предел числа файлов.", "The file count limit has been exceeded."),
+        ("Недопустимый путь, размер или контрольная сумма файла (предел 64 ГиБ).", "Invalid file path, size or checksum (64 GiB limit)."),
+        ("Отсутствует граф объектов или повторяются пути.", "The object graph is missing or paths are duplicated."),
+        ("Ожидался объект JSON.", "A JSON object was expected."),
+        ("Неизвестные, отсутствующие или повторяющиеся поля JSON.", "Unknown, missing or duplicate JSON fields."),
+        ("Превышен предел числа записей.", "The record count limit has been exceeded."),
+        ("Неверная запись графа.", "Invalid object graph record."),
+        ("В таблице допустимы только скалярные значения.", "Only scalar table values are allowed."),
+        ("Нечисловая величина.", "Invalid numeric value."),
+        ("Повторяющийся реквизит записи.", "Duplicate record field."),
+        ("В пакете нет выбранных объектов.", "The package contains no selected objects."),
+        ("Неизвестные или отсутствующие реквизиты таблицы.", "Unknown or missing table fields."),
+        ("Тип реквизита не соответствует схеме.", "A field type does not match the schema."),
+        ("Неверный UUID записи.", "Invalid record UUID."),
+        ("Неверное время записи.", "Invalid record timestamp."),
+        ("Исходные XML не входят в обмен выбранными объектами.", "Source XML files are not included in selected-object exchange."),
+        ("Готовый объект не удовлетворяет требованиям полноты.", "A ready object does not meet the completeness requirements."),
+        ("Состав изображений не соответствует графу.", "The images do not match the object graph."),
+        ("Изображение не соответствует манифесту.", "An image does not match the manifest."),
+        ("Неподдерживаемый формат или размеры изображения.", "Unsupported image format or dimensions."),
+        ("В пакет включены посторонние записи.", "The package contains unrelated records."),
+        ("Действующая запись ссылается на удалённого владельца.", "An active record refers to a deleted owner."),
+        ("Повреждён системный тип тега.", "A predefined tag type is damaged."),
+        ("Повреждён перевод системного типа тега.", "A predefined tag type translation is damaged."),
+        ("Неизвестный системный тип тега.", "Unknown predefined tag type."),
+        ("Файл превышает заявленный размер.", "A file exceeds its declared size."),
+        ("Контрольная сумма файла не совпадает.", "A file checksum does not match."),
+        ("JSON превышает заявленный размер.", "JSON exceeds its declared size."),
+        ("Неполный JSON.", "Incomplete JSON."),
+        ("Один UUID изображения обозначает разные оригиналы. Обмен остановлен: ", "One image UUID identifies different originals. Exchange stopped: "),
+        ("Параметры одного оригинала различаются между каталогами. Обмен остановлен: ", "One original has different metadata in the catalogs. Exchange stopped: "),
+        ("Параметры оригинала не соответствуют пакету. Обмен остановлен: ", "The original does not match the package metadata. Exchange stopped: "),
+        ("План обмена относится к другому каталогу.", "The exchange plan belongs to another catalog."),
+        ("Повреждена история обмена каталогами.", "The catalog exchange history is damaged."),
+        ("Решения не соответствуют плану обмена.", "The decisions do not match the exchange plan."),
+        ("Выберите решение для каждого конфликта, удаления и изменения общего справочника.", "Choose a decision for every conflict, deletion and shared dictionary change."),
+        ("Каталог изменился после предварительного просмотра. Обновите план обмена и повторно проверьте решения.", "The catalog has changed since the preview. Reload the exchange plan and review your decisions."),
+        ("UUID записи и её родительская связь расходятся. Обмен остановлен: ", "A record UUID conflicts with its parent relationship. Exchange stopped: "),
+        ("UUID дочерней записи принадлежит другому объекту. Обмен остановлен: ", "A child record UUID belongs to another object. Exchange stopped: "),
+        ("Существующее изображение объекта нельзя подменять другим оригиналом.", "An existing object image cannot be replaced with a different original."),
+        ("Решения оставляют ссылки на удалённые записи. Сохраните используемые справочники или измените решения по связанным объектам.", "The decisions leave references to deleted records. Keep the required dictionary entries or change the related object decisions."),
         ("Некорректная физическая калибровка изображения.", "The image physical calibration is invalid."),
         ("Калибровка не соответствует размерам исходного изображения. Задайте физические размеры заново.", "The calibration does not match the original image dimensions. Enter its physical dimensions again."),
         ("Повреждено описание области.", "The region description is damaged."),
