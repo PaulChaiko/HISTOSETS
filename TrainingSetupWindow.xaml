@@ -4,6 +4,12 @@
         Width="1080" Height="850" MinWidth="640" MinHeight="520"
         Background="{StaticResource BrandBackgroundBrush}" FontFamily="Segoe UI" FontSize="14"
         WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <Style x:Key="WrappedPlanCell" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="5"/>
+        </Style>
+    </Window.Resources>
     <Grid Margin="20">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Grid Margin="0,0,0,12">
@@ -77,21 +83,19 @@
                         <TextBlock x:Name="EligibilityHeading" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <DataGrid x:Name="EligibilityList" Height="220" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" SelectionMode="Single" Background="#FAF8FD">
                             <DataGrid.Columns>
-                                <DataGridTextColumn x:Name="EligibilityMaterialColumn" Binding="{Binding Material}" Width="170"/>
-                                <DataGridTextColumn x:Name="EligibilityMethodColumn" Binding="{Binding Method}" Width="210"/>
+                                <DataGridTextColumn x:Name="EligibilityMaterialColumn" Binding="{Binding Material}" Width="170" ElementStyle="{StaticResource WrappedPlanCell}"/>
+                                <DataGridTextColumn x:Name="EligibilityMethodColumn" Binding="{Binding Method}" Width="210" ElementStyle="{StaticResource WrappedPlanCell}"/>
                                 <DataGridTextColumn x:Name="EligibilityCountColumn" Binding="{Binding Count}" Width="75"/>
-                                <DataGridTextColumn x:Name="EligibilityReasonColumn" Binding="{Binding Reason}" Width="*" MinWidth="230">
-                                    <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Margin" Value="5"/></Style></DataGridTextColumn.ElementStyle>
-                                </DataGridTextColumn>
+                                <DataGridTextColumn x:Name="EligibilityReasonColumn" Binding="{Binding Reason}" Width="*" MinWidth="230" ElementStyle="{StaticResource WrappedPlanCell}"/>
                             </DataGrid.Columns>
                         </DataGrid>
                         <TextBlock x:Name="QueueHeading" FontSize="16" FontWeight="SemiBold" Margin="0,16,0,8"/>
                         <DataGrid x:Name="QueueList" Height="220" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" SelectionMode="Single" SelectionChanged="Queue_Changed" Background="#FAF8FD">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="№" Binding="{Binding Number}" Width="45"/>
-                                <DataGridTextColumn x:Name="QueueMethodColumn" Binding="{Binding Method}" Width="210"/>
-                                <DataGridTextColumn x:Name="QueueMaterialColumn" Binding="{Binding Material}" Width="*" MinWidth="160"/>
-                                <DataGridTextColumn x:Name="QueueAnswerColumn" Binding="{Binding Answer}" Width="*" MinWidth="150"/>
+                                <DataGridTextColumn x:Name="QueueMethodColumn" Binding="{Binding Method}" Width="210" ElementStyle="{StaticResource WrappedPlanCell}"/>
+                                <DataGridTextColumn x:Name="QueueMaterialColumn" Binding="{Binding Material}" Width="*" MinWidth="160" ElementStyle="{StaticResource WrappedPlanCell}"/>
+                                <DataGridTextColumn x:Name="QueueAnswerColumn" Binding="{Binding Answer}" Width="*" MinWidth="150" ElementStyle="{StaticResource WrappedPlanCell}"/>
                             </DataGrid.Columns>
                         </DataGrid>
                         <Border Background="#F1EDF7" Padding="12" Margin="0,10,0,0">

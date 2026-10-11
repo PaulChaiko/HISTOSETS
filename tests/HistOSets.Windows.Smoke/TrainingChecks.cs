@@ -157,8 +157,15 @@ internal static partial class Program
                     "All six methods receive eligibility results and tracing is prepared from saved regions without starting an exercise");
                 ((TabControl)setup.FindName("TrainingTabs")).SelectedItem = setup.FindName("SetupTab");
                 SaveScreenshot(setup, Path.Combine(output, "native-training-setup-en.png"));
+                var setupScroll = VisualChildren<ScrollViewer>(setup).Single(view => ReferenceEquals(view.Content, setup.FindName("SetupPanel")));
+                setupScroll.ScrollToBottom(); Pump();
+                SaveScreenshot(setup, Path.Combine(output, "native-training-methods-en.png"));
+                setupScroll.ScrollToTop(); Pump();
                 Click(setup, "LanguageButton"); WaitTraining(setup);
                 SaveScreenshot(setup, Path.Combine(output, "native-training-setup-ru.png"));
+                setupScroll.ScrollToBottom(); Pump();
+                SaveScreenshot(setup, Path.Combine(output, "native-training-methods-ru.png"));
+                setupScroll.ScrollToTop(); Pump();
             });
             Check(ExchangeCatalogSnapshot(root) == before,
                 "Native training selection, previews, language changes and plan building leave all catalog bytes and file paths unchanged");
