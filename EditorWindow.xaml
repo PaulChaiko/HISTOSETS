@@ -1,0 +1,120 @@
+<Window x:Class="HistOSets.EditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:HistOSets.Controls"
+        Title="HISTOSETS" Width="1420" Height="900" MinWidth="1000" MinHeight="700"
+        WindowStartupLocation="CenterOwner" Background="#F4F1F8"
+        PreviewKeyDown="Window_KeyDown" Closing="Window_Closing">
+    <DockPanel Margin="12">
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+            <Button x:Name="SaveDraftButton" Click="SaveDraft_Click"/>
+            <Button x:Name="ReadyButton" Click="Ready_Click"/>
+            <Button x:Name="UndoButton" Click="Undo_Click"/>
+            <Button x:Name="RedoButton" Click="Redo_Click"/>
+            <Button x:Name="LanguageButton" Content="РУССКИЙ | ENGLISH" Click="Language_Click"/>
+            <Button x:Name="CloseButton" Click="Close_Click"/>
+        </WrapPanel>
+        <Border DockPanel.Dock="Bottom" Background="White" Padding="8" Margin="0,8,0,0">
+            <ScrollViewer MaxHeight="115" VerticalScrollBarVisibility="Auto">
+                <TextBlock x:Name="OperationStatus" TextWrapping="Wrap"/>
+            </ScrollViewer>
+        </Border>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*" MinWidth="340"/></Grid.ColumnDefinitions>
+            <DockPanel Grid.Column="0">
+                <StackPanel DockPanel.Dock="Top">
+                    <TextBlock x:Name="ImageHeading" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <ComboBox x:Name="ImageList" DisplayMemberPath="Label" SelectionChanged="Image_Changed" Margin="0,0,0,7"/>
+                    <WrapPanel Margin="0,0,0,7">
+                        <Button x:Name="AddImageButton" Click="AddImage_Click"/>
+                        <Button x:Name="PrimaryImageButton" Click="PrimaryImage_Click"/>
+                        <Button x:Name="RemoveImageButton" Click="RemoveImage_Click"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,0,0,7">
+                        <RadioButton x:Name="PanTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5" IsChecked="True"/>
+                        <RadioButton x:Name="SelectTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
+                        <RadioButton x:Name="RectangleTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
+                        <RadioButton x:Name="EllipseTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
+                        <RadioButton x:Name="PolygonTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,0,0,7">
+                        <Button x:Name="ZoomOutButton" Content="−" Click="ZoomOut_Click"/>
+                        <Button x:Name="ZoomInButton" Content="+" Click="ZoomIn_Click"/>
+                        <Button x:Name="FitButton" Click="Fit_Click"/>
+                        <Button x:Name="ActualSizeButton" Content="1:1" Click="ActualSize_Click"/>
+                        <Button x:Name="FinishPolygonButton" Click="FinishPolygon_Click"/>
+                        <Button x:Name="CancelPolygonButton" Click="CancelPolygon_Click"/>
+                        <Button x:Name="DeleteRegionButton" Click="DeleteRegion_Click"/>
+                    </WrapPanel>
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Bottom" x:Name="CanvasHint" TextWrapping="Wrap" Margin="3,7,3,0" Foreground="#555555"/>
+                <Border BorderBrush="#62527D" BorderThickness="1" Background="#17151B">
+                    <controls:RegionEditorSurface x:Name="Surface"/>
+                </Border>
+            </DockPanel>
+            <TabControl x:Name="FormTabs" Grid.Column="2">
+                <TabItem x:Name="ObjectTab">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="8">
+                            <TextBlock x:Name="MaterialHelp" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                            <GroupBox Header="RU" Background="#EDE5FB" Margin="0,0,0,10">
+                                <StackPanel Margin="7">
+                                    <TextBlock x:Name="MaterialRuNameLabel"/><TextBox x:Name="MaterialRuName" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                    <TextBlock x:Name="MaterialRuSummaryLabel" Margin="0,7,0,0"/><TextBox x:Name="MaterialRuSummary" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" MaxHeight="150" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                    <TextBlock x:Name="MaterialRuDescriptionLabel" Margin="0,7,0,0"/><TextBox x:Name="MaterialRuDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="110" MaxHeight="230" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                </StackPanel>
+                            </GroupBox>
+                            <GroupBox Header="EN" Background="#EDE5FB">
+                                <StackPanel Margin="7">
+                                    <TextBlock x:Name="MaterialEnNameLabel"/><TextBox x:Name="MaterialEnName" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                    <TextBlock x:Name="MaterialEnSummaryLabel" Margin="0,7,0,0"/><TextBox x:Name="MaterialEnSummary" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" MaxHeight="150" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                    <TextBlock x:Name="MaterialEnDescriptionLabel" Margin="0,7,0,0"/><TextBox x:Name="MaterialEnDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="110" MaxHeight="230" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                </StackPanel>
+                            </GroupBox>
+                            <TextBlock x:Name="LegacyTextNotice" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+                <TabItem x:Name="ElementsTab">
+                    <DockPanel Margin="8">
+                        <StackPanel DockPanel.Dock="Top">
+                            <ListBox x:Name="ElementList" DisplayMemberPath="Label" Height="105" SelectionChanged="Element_Changed" Background="#FFE5FA"/>
+                            <WrapPanel Margin="0,7,0,7"><Button x:Name="AddElementButton" Click="AddElement_Click"/><Button x:Name="DeleteElementButton" Click="DeleteElement_Click"/></WrapPanel>
+                        </StackPanel>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="ElementFields">
+                                <GroupBox Header="RU" Background="#FFF0FC" Margin="0,0,0,10"><StackPanel Margin="7">
+                                    <TextBlock x:Name="ElementRuNameLabel"/><TextBox x:Name="ElementRuName" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                    <TextBlock x:Name="ElementRuSummaryLabel" Margin="0,7,0,0"/><TextBox x:Name="ElementRuSummary" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" MaxHeight="150" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                    <TextBlock x:Name="ElementRuDescriptionLabel" Margin="0,7,0,0"/><TextBox x:Name="ElementRuDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="95" MaxHeight="230" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                </StackPanel></GroupBox>
+                                <GroupBox Header="EN" Background="#FFF0FC"><StackPanel Margin="7">
+                                    <TextBlock x:Name="ElementEnNameLabel"/><TextBox x:Name="ElementEnName" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                    <TextBlock x:Name="ElementEnSummaryLabel" Margin="0,7,0,0"/><TextBox x:Name="ElementEnSummary" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" MaxHeight="150" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                    <TextBlock x:Name="ElementEnDescriptionLabel" Margin="0,7,0,0"/><TextBox x:Name="ElementEnDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="95" MaxHeight="230" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                                </StackPanel></GroupBox>
+                                <TextBlock x:Name="RegionsHeading" FontWeight="Bold" Margin="0,10,0,5"/>
+                                <ListBox x:Name="RegionList" DisplayMemberPath="Label" MaxHeight="140" SelectionChanged="Region_Changed"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DockPanel>
+                </TabItem>
+                <TabItem x:Name="MetadataTab">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="8">
+                        <TextBlock x:Name="AnalogLabel" FontWeight="Bold"/>
+                        <ComboBox x:Name="AnalogList" DisplayMemberPath="Label" SelectionChanged="Analog_Changed" Margin="0,5,0,7"/>
+                        <Button x:Name="NewAnalogButton" Click="NewAnalog_Click" HorizontalAlignment="Left"/>
+                        <TextBlock x:Name="TagTypeLabel" FontWeight="Bold" Margin="0,15,0,5"/>
+                        <ComboBox x:Name="TagTypeList" DisplayMemberPath="Label" SelectionChanged="TagType_Changed"/>
+                        <TextBox x:Name="TagSearch" TextChanged="TagSearch_Changed" Margin="0,7,0,7"/>
+                        <StackPanel x:Name="TagChoices"/>
+                        <Button x:Name="NewTagButton" Click="NewTag_Click" HorizontalAlignment="Left" Margin="0,7,0,0"/>
+                        <TextBlock x:Name="DictionaryHelp" TextWrapping="Wrap" Margin="0,8,0,10"/>
+                        <TextBlock x:Name="AuthorCreditLabel"/><TextBox x:Name="AuthorCredit" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                        <TextBlock x:Name="RightsCreditLabel" Margin="0,7,0,0"/><TextBox x:Name="RightsCredit" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
+                    </StackPanel></ScrollViewer>
+                </TabItem>
+            </TabControl>
+        </Grid>
+    </DockPanel>
+</Window>

@@ -4,10 +4,12 @@ public enum CoordinateSpace { LegacyDip, Pixels }
 
 public readonly record struct AtlasPoint(double X, double Y);
 public sealed record AtlasPolygon(IReadOnlyList<AtlasPoint> Points);
+public sealed record AtlasRegion(Guid Id, RegionGeometry Geometry);
 public sealed record AtlasElement(string Name, string Summary, string Description,
     IReadOnlyList<AtlasPolygon> Polygons)
 {
     public Guid? Id { get; init; }
+    public IReadOnlyList<AtlasRegion> Regions { get; init; } = [];
 }
 public sealed record AtlasSpecimen(string Name, string ImagePath, string Summary,
     string Description, CoordinateSpace CoordinateSpace, IReadOnlyList<AtlasElement> Elements)
@@ -21,8 +23,11 @@ public sealed record AtlasSpecimen(string Name, string ImagePath, string Summary
     public IReadOnlyDictionary<string, string> AnalogGroupNames { get; init; } = new Dictionary<string, string>();
     public string Locale { get; init; } = "und";
     public string DisplayLocale { get; init; } = "ru";
-    public string DisplayName => AnalogGroupId is null || AnalogGroupNames.Count == 0 ? Name
-        : CatalogBrowser.Label(AnalogGroupNames, DisplayLocale) + " — " + Name;
+    private string ObjectLabel => string.IsNullOrWhiteSpace(Name)
+        ? DisplayLocale == "en" ? "Untitled object" : "Объект без названия"
+        : Name;
+    public string DisplayName => AnalogGroupId is null || AnalogGroupNames.Count == 0 ? ObjectLabel
+        : CatalogBrowser.Label(AnalogGroupNames, DisplayLocale) + " — " + ObjectLabel;
     public string LocaleLabel => CatalogBrowser.LanguageName(Locale, DisplayLocale);
     public string? ImageIssue { get; init; }
 }

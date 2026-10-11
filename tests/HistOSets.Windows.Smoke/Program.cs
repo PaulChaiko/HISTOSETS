@@ -12,7 +12,7 @@ using HistOSets.Services;
 using HistOSets.Storage;
 using Microsoft.Web.WebView2.Wpf;
 
-internal static class Program
+internal static partial class Program
 {
     private static int checks;
     [STAThread]
@@ -170,7 +170,7 @@ internal static class Program
             Check(home.SelectedCatalogDirectory is null && !((Button)home.FindName("ViewButton")).IsEnabled,
                 "Home starts with no selected database and cannot open the viewer");
             Check(!((Button)home.FindName("SelfTestButton")).IsEnabled && !((Button)home.FindName("EditButton")).IsEnabled,
-                "Home does not offer unfinished editor and self-test modes");
+                "Home requires a selected database for editing and keeps unfinished self-test disabled");
             Click(home, "LanguageButton");
             Check(Equals(((Button)home.FindName("ViewButton")).Content, "View")
                 && ((TextBlock)home.FindName("CatalogName")).Text == "No database selected"
@@ -215,7 +215,11 @@ internal static class Program
             Check(((TextBlock)home.FindName("CatalogName")).Text == "Пустая учебная база"
                 && ((TextBlock)home.FindName("CatalogStatistics")).Text == "Объектов: 0",
                 "A newly created empty catalog opens without importing demonstration objects");
+            Check(((Button)home.FindName("EditButton")).IsEnabled && !((Button)home.FindName("SelfTestButton")).IsEnabled,
+                "Selected empty database enables the object editor while self-test remains unavailable");
+            var edited = CheckEditorWorkflow(home, selected.ImagePath, output);
             home.Close();
+            CheckSavedEditorObject(emptyRoot, output, edited);
 
             var backupPath = System.IO.Path.Combine(temp, "native-backup.histosets");
             Guid topicId;

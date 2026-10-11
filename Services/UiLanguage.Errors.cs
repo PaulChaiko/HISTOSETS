@@ -12,6 +12,9 @@ internal static partial class UiLanguage
     internal static string Message(string message)
     {
         if (Locale != "en") return message;
+        const string readinessPrefix = "Объект пока не готов:\n";
+        if (message.StartsWith(readinessPrefix, StringComparison.Ordinal))
+            return "The object is not ready yet:\n" + string.Join("\n", message[readinessPrefix.Length..].Split('\n').Select(ReadinessIssue));
         foreach (var (russian, english) in ErrorMessages)
             if (message.StartsWith(russian, StringComparison.Ordinal))
                 return english + message[russian.Length..];
@@ -25,8 +28,56 @@ internal static partial class UiLanguage
         return "The operation could not be completed. Diagnostic details:\n" + message;
     }
 
+    internal static string ReadinessIssue(string issue)
+    {
+        if (Locale != "en") return issue;
+        var labels = new Dictionary<string, string>
+        {
+            ["Объект"] = "Object", ["Элемент"] = "Element", ["Тег"] = "Tag",
+            ["Тип тега"] = "Tag type", ["Группа аналогов"] = "Analog group"
+        };
+        var missing = Regex.Match(issue, @"^(Объект|Элемент(?: \d+)?|Тег|Тип тега|Группа аналогов): отсутствует перевод (RU|EN)\.$");
+        var field = Regex.Match(issue, @"^(Объект|Элемент(?: \d+)?|Тег|Тип тега|Группа аналогов) \((RU|EN)\): заполните (название|краткое описание|полное описание)\.$");
+        string Label(string label) => label.StartsWith("Элемент ", StringComparison.Ordinal)
+            ? "Element " + label[8..] : labels.GetValueOrDefault(label, label);
+        if (missing.Success) return $"{Label(missing.Groups[1].Value)}: {missing.Groups[2].Value} translation is missing.";
+        if (field.Success)
+        {
+            var name = field.Groups[3].Value switch { "название" => "name", "краткое описание" => "summary", _ => "full description" };
+            return $"{Label(field.Groups[1].Value)} ({field.Groups[2].Value}): enter the {name}.";
+        }
+        return issue switch
+        {
+            "Выберите основное изображение." => "Select a primary image.",
+            "Группа аналогов удалена." => "The analog group has been deleted.",
+            "У тега не выбран тип." => "A tag has no assigned type.",
+            _ when issue.StartsWith("Изображение отсутствует или изменено: ", StringComparison.Ordinal)
+                => "An image is missing or has changed: " + issue["Изображение отсутствует или изменено: ".Length..],
+            _ => Message(issue)
+        };
+    }
+
     private static readonly (string Russian, string English)[] ErrorMessages =
     [
+        ("Повреждено описание области.", "The region description is damaged."),
+        ("Повторно добавьте изображение: отсутствует контрольная сумма исходного файла.", "Add the image again: its source file checksum is missing."),
+        ("Исходное изображение изменилось после добавления. Добавьте его заново и проверьте области.", "The source image has changed since it was added. Add it again and check its regions."),
+        ("Нужен оригинал изображения с нормальной ориентацией и положительными размерами.", "Use an original image with normal orientation and positive dimensions."),
+        ("Для изображения не выбран исходный файл.", "Select a source file for the image."),
+        ("Одно изображение нельзя дважды добавить в один объект.", "The same image cannot be added twice to one object."),
+        ("Изображение отсутствует или изменено: ", "An image is missing or has changed: "),
+        ("Для замены снимка добавьте новое изображение. Существующие области нельзя переносить на другой оригинал автоматически.", "Add a new image to replace this one. Existing regions cannot be transferred automatically to a different original."),
+        ("Не удалось сохранить объект. Изменения базы отменены.\n", "The object could not be saved. Database changes have been rolled back.\n"),
+        ("Некорректные сведения объекта.", "The object data is invalid."),
+        ("Идентификаторы записей редактора должны быть непустыми и уникальными.", "Editor record identifiers must be nonempty and unique."),
+        ("У объекта может быть только одно основное изображение.", "An object can have only one primary image."),
+        ("Область ссылается на отсутствующее изображение. Удалите её явно или сохраните изображение.", "A region refers to a missing image. Explicitly remove the region or retain its image."),
+        ("Некорректная геометрия области.", "The region geometry is invalid."),
+        ("Некорректная языковая запись.", "A translation record is invalid."),
+        ("Изображение не найдено или удалено.", "The image is missing or deleted."),
+        ("Объект изменён или удалён после открытия редактора. Откройте его заново; ваши правки не перезаписали новые данные.", "The object was changed or deleted after the editor opened. Reopen it; your edits have not overwritten newer data."),
+        ("Запись редактора принадлежит другому объекту.", "An editor record belongs to another object."),
+        ("Нельзя удалить несохранённый объект.", "An unsaved object cannot be deleted from the catalog."),
         ("Отсутствуют сведения о каталоге.", "Catalog metadata is missing."),
         ("Группа аналогов с таким названием уже существует.", "An analog group with this name already exists."),
         ("Группа используется объектами. Сначала снимите назначения или перенесите объекты в другую группу.", "This group is assigned to objects. Unassign them or move them to another group first."),

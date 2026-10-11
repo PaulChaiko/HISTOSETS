@@ -112,9 +112,13 @@ public partial class ViewerPreviewWindow : Window
                     elements = specimen.Elements.Select((element, i) => new
                     {
                         id = "element-" + i, name = element.Name,
-                        polygons = element.Polygons.Select(polygon => polygon.Points.Select(p =>
+                        // The experimental preview is polygon-only. This projection
+                        // never replaces exact ellipse/rectangle geometry in storage.
+                        polygons = (element.Regions.Count > 0
+                            ? element.Regions.Select(region => RegionGeometryCodec.ToPolygon(region.Geometry))
+                            : element.Polygons).Select(polygon => polygon.Points.Select(p =>
                         {
-                            var point = ImageCoordinates.ToPixels(p, specimen.CoordinateSpace, image.DpiX, image.DpiY);
+                            var point = element.Regions.Count > 0 ? p : ImageCoordinates.ToPixels(p, specimen.CoordinateSpace, image.DpiX, image.DpiY);
                             return new[] { point.X, point.Y };
                         }))
                     })
