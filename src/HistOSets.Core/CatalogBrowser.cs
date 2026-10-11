@@ -3,7 +3,11 @@ using System.Text;
 
 namespace HistOSets.Core;
 
-public sealed record CatalogTagGroup(Guid Id, IReadOnlyDictionary<string, string> Names);
+public sealed record CatalogTagGroup(Guid Id, IReadOnlyDictionary<string, string> Names)
+{
+    public bool IsSystem { get; init; }
+    public string Code { get; init; } = "";
+}
 public sealed record CatalogTag(Guid Id, Guid? GroupId, IReadOnlyDictionary<string, string> Names);
 public sealed record CatalogTaxonomy(IReadOnlyList<CatalogTagGroup> Groups, IReadOnlyList<CatalogTag> Tags,
     IReadOnlyDictionary<Guid, IReadOnlySet<Guid>> MaterialTags)
@@ -18,9 +22,14 @@ public static class CatalogBrowser
 
     public static string Label(IReadOnlyDictionary<string, string> names, string locale)
         => names.GetValueOrDefault(locale) ?? names.GetValueOrDefault("ru") ?? names.GetValueOrDefault("en")
-            ?? names.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Value).FirstOrDefault() ?? "Без названия";
+            ?? names.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Value).FirstOrDefault() ?? (locale == "en" ? "Untitled" : "Без названия");
 
-    public static string LanguageName(string locale) => locale switch { "ru" => "Русский", "en" => "English", "und" => "Язык не указан", _ => locale };
+    public static string LanguageName(string locale, string displayLocale = "ru") => locale switch
+    {
+        "ru" => displayLocale == "en" ? "Russian" : "Русский",
+        "en" => displayLocale == "en" ? "English" : "Английский",
+        "und" => displayLocale == "en" ? "Language unspecified" : "Язык не указан", _ => locale
+    };
 
     public static IReadOnlyList<AtlasSpecimen> Filter(AtlasCatalog catalog, string locale, string query,
         IReadOnlyCollection<Guid> selectedTags, CatalogTaxonomy taxonomy, bool alphabetic = false)
@@ -34,19 +43,21 @@ public static class CatalogBrowser
         foreach (var group in catalog.Specimens.Select((s, i) => (s, key: s.MaterialId?.ToString() ?? "legacy:" + i)).GroupBy(x => x.key))
         {
             var views = group.Select(x => x.s).ToArray();
-            if (!tokens.All(token => views.Any(s => Normalize(s.Name).Contains(token, StringComparison.Ordinal)))) continue;
+            if (!tokens.All(token => views.Any(s => Normalize(s.Name).Contains(token, StringComparison.Ordinal)
+                || s.AnalogGroupId is not null && s.AnalogGroupNames.Values.Any(name => Normalize(name).Contains(token, StringComparison.Ordinal))))) continue;
             var material = views[0].MaterialId;
             var assigned = material is { } id ? taxonomy.MaterialTags.GetValueOrDefault(id) : null;
             if (!tagSets.All(set => assigned is not null && set.Any(assigned.Contains))) continue;
-            results.Add(ChooseLanguage(views, locale)[0]);
+            var translated = ChooseLanguage(views, locale);
+            results.Add(translated.FirstOrDefault(s => s.IsPrimaryImage) ?? translated[0]);
         }
-        return alphabetic ? results.OrderBy(s => s.Name, StringComparer.Create(CultureInfo.GetCultureInfo(locale == "en" ? "en-US" : "ru-RU"), true)).ToArray() : results;
+        return alphabetic ? results.OrderBy(s => s.DisplayName, StringComparer.Create(CultureInfo.GetCultureInfo(locale == "en" ? "en-US" : "ru-RU"), true)).ToArray() : results;
     }
 
     public static IReadOnlyList<AtlasSpecimen> ChooseLanguage(IEnumerable<AtlasSpecimen> variants, string locale)
     {
         var all = variants.ToArray();
         var language = new[] { locale, "ru", "en", "und" }.FirstOrDefault(l => all.Any(s => s.Locale == l)) ?? all.FirstOrDefault()?.Locale;
-        return all.Where(s => s.Locale == language).ToArray();
+        return all.Where(s => s.Locale == language).Select(s => s with { DisplayLocale = locale }).ToArray();
     }
 }

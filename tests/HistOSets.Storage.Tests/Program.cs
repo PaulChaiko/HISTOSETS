@@ -81,7 +81,7 @@ try
         var dbHash = Hash(store.DatabasePath);
         Check(store.ImportLegacy(sourceXml, source, Metadata).AlreadyImported && Hash(store.DatabasePath) == dbHash, "Identical import is a byte-for-byte database no-op");
         Reject<CatalogStorageException>(() => { using var duplicate = new CatalogStore(root); }, "Second application cannot own the same catalog");
-        Check(Convert.ToInt64(Sql(store.DatabasePath, "SELECT COUNT(*) FROM schema_migrations;")) == 1, "Schema version recorded once");
+        Check(Convert.ToInt64(Sql(store.DatabasePath, "SELECT COUNT(*) FROM schema_migrations;")) == 2, "Both schema migrations recorded once");
         Check(Convert.ToInt64(Sql(store.DatabasePath, "PRAGMA foreign_keys;")) == 1, "Foreign keys enforced");
         Reject<SqliteException>(() => Sql(store.DatabasePath, "UPDATE regions SET material_id = (SELECT id FROM materials WHERE id <> regions.material_id LIMIT 1);"), "A region cannot cross material boundaries");
         var changed = Path.Combine(temp, "changed.xml");
@@ -236,10 +236,10 @@ try
         var sameNames = new AtlasCatalog([data.Specimens[0] with { Name = "Same" }, data.Specimens[1] with { Name = "Same" }], []);
         Check(CatalogBrowser.Filter(sameNames, "ru", "", [], CatalogTaxonomy.Empty).Count == 2, "Equal material titles do not merge UUIDs");
         var hashBeforeOpening = Hash(store.DatabasePath);
-        Check(store.LoadTaxonomy().Tags.Count == 0 && Hash(store.DatabasePath) == hashBeforeOpening && Convert.ToInt64(Sql(store.DatabasePath, "PRAGMA user_version;")) == 1, "Existing update2 schema opens without a destructive migration or invented tags");
+        Check(store.LoadTaxonomy().Tags.Count == 0 && Hash(store.DatabasePath) == hashBeforeOpening && Convert.ToInt64(Sql(store.DatabasePath, "PRAGMA user_version;")) == 2, "Schema2 reads are a no-op and system types do not invent tag values");
 
-        groupId = store.SaveTagGroup(null, "Тема", "Topic");
-        var purpose = store.SaveTagGroup(null, "Назначение", "Purpose");
+        groupId = store.LoadTaxonomy().Groups.Single(g => g.Code == "topic").Id;
+        var purpose = store.LoadTaxonomy().Groups.Single(g => g.Code == "purpose").Id;
         tagId = store.SaveTag(null, groupId, "Эпителий", "Epithelium");
         var other = store.SaveTag(null, groupId, "Другая ткань", "Other tissue");
         var teaching = store.SaveTag(null, purpose, "Учебный", "Teaching");
@@ -248,7 +248,7 @@ try
         store.SetMaterialTags(materialId, [tagId, teaching]);
         store.SetMaterialTags(secondMaterial, [other]);
         var taxonomy = store.LoadTaxonomy();
-        Check(taxonomy.Groups.Count == 2 && taxonomy.Tags.Count == 3 && taxonomy.MaterialTags[materialId].SetEquals([tagId, teaching]), "Create translated groups and tags, assign material-wide tags");
+        Check(taxonomy.Groups.Count == 6 && taxonomy.Tags.Count == 3 && taxonomy.MaterialTags[materialId].SetEquals([tagId, teaching]), "Use six predefined types, create translated tags and material-wide assignments");
         Check(CatalogBrowser.Filter(data, "ru", "", [tagId, other], taxonomy).Count == 2, "Tag alternatives in one group use OR");
         Check(CatalogBrowser.Filter(data, "en", "", [tagId, other, teaching], taxonomy).Single().MaterialId == materialId, "Different tag groups use AND independent of display language");
         var link = Sql(store.DatabasePath, $"SELECT id FROM material_tags WHERE material_id = '{materialId}' AND tag_id = '{tagId}';");
@@ -269,16 +269,15 @@ try
         store.SetMaterialTags(materialId, [teaching]);
         store.SetMaterialTags(materialId, [tagId, teaching]);
         Check(Equals(link, Sql(store.DatabasePath, $"SELECT id FROM material_tags WHERE material_id = '{materialId}' AND tag_id = '{tagId}';")), "Reassignment revives the same link UUID");
-        store.SaveTagGroup(groupId, "Тема занятия", "Topic");
+        Reject<CatalogStorageException>(() => store.SaveTagGroup(groupId, "Тема занятия", "Topic"), "System type cannot be renamed");
         store.SaveTag(tagId, groupId, "Эпителиальные ткани", "Epithelial tissue");
         Check(store.LoadTaxonomy().MaterialTags[materialId].Contains(tagId) && CatalogBrowser.Label(store.LoadTaxonomy().Tags.Single(t => t.Id == tagId).Names, "ru") == "Эпителиальные ткани", "Rename preserves tag identity and assignments");
         Reject<CatalogStorageException>(() => store.DeleteTagGroup(groupId), "Nonempty group cannot be deleted accidentally");
         store.DeleteTag(other);
         Check(!store.LoadTaxonomy().MaterialTags.ContainsKey(secondMaterial) && !store.LoadTaxonomy().Tags.Any(t => t.Id == other), "Deleting a tag removes its active assignments");
         Check(Convert.ToInt64(Sql(store.DatabasePath, $"SELECT COUNT(*) FROM material_tags WHERE tag_id = '{other}' AND deleted_utc IS NOT NULL;")) == 1, "Removed assignment retains a deletion marker");
-        var empty = store.SaveTagGroup(null, "Временная", "");
-        store.DeleteTagGroup(empty);
-        Check(!store.LoadTaxonomy().Groups.Any(g => g.Id == empty), "Empty group can be removed");
+        Reject<CatalogStorageException>(() => store.SaveTagGroup(null, "Временная", "Temporary"), "New custom types cannot be created");
+        Reject<CatalogStorageException>(() => store.DeleteTagGroup(purpose), "System type cannot be deleted");
         Check(Equivalent(original, store.Load(), Metadata) && store.ImportLegacy(sourceXml, source, Metadata).AlreadyImported, "Tag edits preserve every source text, image, contour and original import identity");
         store.CreateBackup(tagsBackup);
     }
@@ -290,6 +289,7 @@ try
         Check(taxonomy.MaterialTags[materialId].Contains(tagId) && taxonomy.Groups.Any(g => g.Id == groupId) && taxonomy.Tags.Single(t => t.Id == tagId).Names.Count == 2, "Full backup restores tag identities, translations and assignments");
         Check(Equivalent(original, store.Load(), Metadata), "Restored tag catalog still preserves all atlas geometry and descriptions");
     }
+    count += FoundationChecks.Run(source, backup, temp);
     Console.WriteLine($"{count} storage checks passed.");
 }
 finally { Directory.Delete(temp, true); }

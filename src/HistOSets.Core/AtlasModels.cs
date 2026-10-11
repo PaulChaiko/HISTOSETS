@@ -14,8 +14,16 @@ public sealed record AtlasSpecimen(string Name, string ImagePath, string Summary
 {
     public Guid? MaterialId { get; init; }
     public Guid? ImageId { get; init; }
+    public Guid? MaterialImageId { get; init; }
+    public bool IsPrimaryImage { get; init; }
+    public string Status { get; init; } = "draft";
+    public Guid? AnalogGroupId { get; init; }
+    public IReadOnlyDictionary<string, string> AnalogGroupNames { get; init; } = new Dictionary<string, string>();
     public string Locale { get; init; } = "und";
-    public string LocaleLabel => CatalogBrowser.LanguageName(Locale);
+    public string DisplayLocale { get; init; } = "ru";
+    public string DisplayName => AnalogGroupId is null || AnalogGroupNames.Count == 0 ? Name
+        : CatalogBrowser.Label(AnalogGroupNames, DisplayLocale) + " — " + Name;
+    public string LocaleLabel => CatalogBrowser.LanguageName(Locale, DisplayLocale);
     public string? ImageIssue { get; init; }
 }
 public sealed record AtlasCatalog(IReadOnlyList<AtlasSpecimen> Specimens,

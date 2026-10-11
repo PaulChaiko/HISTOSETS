@@ -9,7 +9,7 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <DockPanel Margin="0,0,0,10" Background="{StaticResource BrandSurfaceBrush}">
             <Button x:Name="DziButton" DockPanel.Dock="Right" Content="Открыть пирамиду DZI…" Click="Dzi_Click" IsEnabled="False"/>
-            <TextBlock Text="Прототип: пробная разметка хранится только до закрытия окна." TextWrapping="Wrap" VerticalAlignment="Center"/>
+            <TextBlock x:Name="PrototypeNotice" Text="Прототип: пробная разметка хранится только до закрытия окна." TextWrapping="Wrap" VerticalAlignment="Center"/>
         </DockPanel>
         <wv:WebView2 x:Name="Browser" Grid.Row="1"/>
         <TextBlock x:Name="ViewerStatus" Grid.Row="2" Text="Загрузка просмотрщика…" TextWrapping="Wrap" Margin="0,10,0,0"

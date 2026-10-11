@@ -12,6 +12,7 @@ public sealed partial class CatalogStore : IDisposable
     private bool disposed;
     public string RootDirectory { get; }
     public string DatabasePath => Path.Combine(RootDirectory, "catalog.sqlite");
+    public string? LastMigrationBackupPath { get; private set; }
 
     public CatalogStore(string rootDirectory)
     {
@@ -34,11 +35,36 @@ public sealed partial class CatalogStore : IDisposable
             {
                 // A database is installed only after the full schema transaction succeeds.
                 var temporary = DatabasePath + ".creating-" + Guid.NewGuid().ToString("N");
-                try { Create(temporary); File.Move(temporary, DatabasePath); }
+                try { Create(temporary, DefaultCatalogName(RootDirectory)); File.Move(temporary, DatabasePath); }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
-            using var connection = Open(DatabasePath);
-            Validate(connection);
+            int version;
+            using (var connection = Open(DatabasePath))
+            {
+                Validate(connection, allowLegacy: true);
+                version = SchemaVersion(connection);
+            }
+            if (version == 1)
+            {
+                var backups = Path.Combine(RootDirectory, "BACKUPS");
+                Directory.CreateDirectory(backups);
+                var path = Path.Combine(backups, "before-schema2-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".histosets");
+                // This snapshot must contain every referenced file before the first database write.
+                CreateBackup(path);
+                LastMigrationBackupPath = path;
+                try
+                {
+                    using var connection = Open(DatabasePath, SqliteOpenMode.ReadWrite);
+                    using var transaction = connection.BeginTransaction();
+                    ApplyVersion2(connection, transaction, DefaultCatalogName(RootDirectory));
+                    Validate(connection, transaction: transaction);
+                    transaction.Commit();
+                }
+                catch (Exception ex) when (ex is SqliteException or CatalogStorageException)
+                {
+                    throw new CatalogStorageException("Не удалось обновить структуру каталога. Резервная копия: " + path, ex);
+                }
+            }
         }
         catch { ownership.Dispose(); throw; }
     }
@@ -81,8 +107,10 @@ public sealed partial class CatalogStore : IDisposable
                     assets.Add(reader.GetString(0), (path, issue));
                 }
             var specimens = new List<AtlasSpecimen>();
+            var analogNames = ReadNames(connection, "analog_group_translations", "group_id");
             using (var command = Command(connection, """
-                SELECT t.material_id, t.locale, t.name, t.summary, t.description, mi.id, mi.image_id
+                SELECT t.material_id, t.locale, t.name, t.summary, t.description, mi.id, mi.image_id,
+                       m.status, mi.is_primary, m.analog_group_id
                 FROM material_translations t
                 JOIN materials m ON m.id = t.material_id AND m.deleted_utc IS NULL
                 JOIN material_images mi ON mi.material_id = m.id AND mi.deleted_utc IS NULL
@@ -98,7 +126,10 @@ public sealed partial class CatalogStore : IDisposable
                     var asset = assets[reader.GetString(6)];
                     specimens.Add(new(reader.GetString(2), asset.Path, reader.GetString(3), reader.GetString(4), CoordinateSpace.Pixels, elements)
                     {
-                        MaterialId = Guid.Parse(material), ImageId = Guid.Parse(reader.GetString(6)), Locale = locale, ImageIssue = asset.Issue
+                        MaterialId = Guid.Parse(material), ImageId = Guid.Parse(reader.GetString(6)), Locale = locale, ImageIssue = asset.Issue,
+                        MaterialImageId = Guid.Parse(reader.GetString(5)), Status = reader.GetString(7), IsPrimaryImage = reader.GetBoolean(8),
+                        AnalogGroupId = reader.IsDBNull(9) ? null : Guid.Parse(reader.GetString(9)),
+                        AnalogGroupNames = reader.IsDBNull(9) ? new Dictionary<string,string>() : analogNames.GetValueOrDefault(reader.GetString(9)) ?? new Dictionary<string,string>()
                     });
                 }
             return new(specimens, warnings);

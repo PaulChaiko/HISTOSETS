@@ -27,6 +27,46 @@ Check(ImageCoordinates.ToPixels(new(103, 76), CoordinateSpace.LegacyDip, 2400, 2
 Check(ImageCoordinates.ToPixels(new(5, 7), CoordinateSpace.LegacyDip, 0, double.NaN) == new AtlasPoint(5, 7), "Invalid DPI uses 96");
 Check(ImageCoordinates.ToPixels(new(103, 76), CoordinateSpace.Pixels, 2400, 2400) == new AtlasPoint(103, 76), "Pixel coordinates are never scaled by DPI");
 
+// Cards are identified by UUID, including same-name analogs. Display language and
+// a primary image are projections; they must never change membership or identity.
+var materialA = Guid.NewGuid();
+var materialB = Guid.NewGuid();
+var groupId = Guid.NewGuid();
+var imageA = Guid.NewGuid();
+var imageB = Guid.NewGuid();
+var analogNames = new Dictionary<string, string> { ["ru"] = "Роговица", ["en"] = "Cornea" };
+var first = new AtlasSpecimen("Поле 1", "image-a.png", "", "", CoordinateSpace.Pixels, [])
+{
+    MaterialId = materialA, ImageId = imageA, Locale = "ru", AnalogGroupId = groupId, AnalogGroupNames = analogNames
+};
+var primary = first with { ImageId = imageB, ImagePath = "image-b.png", IsPrimaryImage = true };
+var english = primary with { Name = "Field 1", Locale = "en" };
+var duplicate = primary with { MaterialId = materialB };
+var unclassified = first with { MaterialId = Guid.NewGuid(), Name = "Без перевода", Locale = "und", AnalogGroupId = null };
+var browserCatalog = new AtlasCatalog([first, primary, english, duplicate, unclassified], []);
+var russianCards = CatalogBrowser.Filter(browserCatalog, "ru", "CORNEA", [], CatalogTaxonomy.Empty);
+Check(russianCards.Count == 2 && russianCards.Select(s => s.MaterialId).Distinct().Count() == 2,
+    "Analog-name search finds cards in any language without merging duplicate object names");
+Check(russianCards[0].ImageId == imageB && russianCards[0].DisplayName == "Роговица — Поле 1",
+    "Browser uses primary image and localized analog label");
+var englishCards = CatalogBrowser.Filter(browserCatalog, "en", "роговица field", [], CatalogTaxonomy.Empty);
+Check(englishCards.Count == 1 && englishCards[0].MaterialId == materialA && englishCards[0].DisplayName == "Cornea — Field 1",
+    "Mixed-language group/object tokens find the same UUID and English display");
+var fallbackCards = CatalogBrowser.Filter(browserCatalog, "en", "без перевода", [], CatalogTaxonomy.Empty);
+Check(fallbackCards.Count == 1 && fallbackCards[0].Locale == "und" && fallbackCards[0].LocaleLabel == "Language unspecified",
+    "Legacy draft with unspecified language remains visible with localized fallback label");
+var authorType = Guid.NewGuid();
+var topicType = Guid.NewGuid();
+var authorA = Guid.NewGuid();
+var authorB = Guid.NewGuid();
+var topic = Guid.NewGuid();
+var tags = new CatalogTaxonomy([], [new(authorA, authorType, new Dictionary<string, string>()),
+    new(authorB, authorType, new Dictionary<string, string>()), new(topic, topicType, new Dictionary<string, string>())],
+    new Dictionary<Guid, IReadOnlySet<Guid>> { [materialA] = new HashSet<Guid> { authorA, topic }, [materialB] = new HashSet<Guid> { authorB } });
+var tagged = CatalogBrowser.Filter(browserCatalog, "en", "cornea", [authorA, authorB, topic], tags);
+Check(tagged.Count == 1 && tagged[0].MaterialId == materialA, "Tag filtering applies OR within a type and AND between types together with analog search");
+Check(CatalogBrowser.Filter(browserCatalog, "en", "", [Guid.NewGuid()], tags).Count == 0, "Unknown selected tag does not silently broaden results");
+
 var temp = Path.Combine(Path.GetTempPath(), "histosets-tests-" + Guid.NewGuid());
 Directory.CreateDirectory(Path.Combine(temp, "ATLAS"));
 Directory.CreateDirectory(Path.Combine(temp, "SPECIMENS"));

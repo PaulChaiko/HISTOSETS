@@ -6,6 +6,12 @@ namespace HistOSets.Storage;
 public sealed record ImageMetadata(int Width, int Height, double DpiX, double DpiY, string MimeType, int Orientation = 1);
 public sealed record CatalogStatistics(int Materials, int Images, int Translations, int Elements, int Regions);
 public sealed record ImportResult(bool AlreadyImported, CatalogStatistics Statistics);
+public sealed record CatalogMetadata(Guid Id, string Name, int FormatVersion, long ContentRevision, DateTimeOffset CreatedUtc, DateTimeOffset ModifiedUtc);
+public sealed record CatalogAnalogGroup(Guid Id, IReadOnlyDictionary<string, string> Names)
+{
+    public string Label(string locale) => HistOSets.Core.CatalogBrowser.Label(Names, locale);
+}
+public sealed record MaterialReadiness(Guid MaterialId, bool IsReady, IReadOnlyList<string> Issues);
 public sealed class CatalogStorageException(string message, Exception? inner = null) : Exception(message, inner);
 
 internal static class StorageFiles

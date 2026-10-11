@@ -20,7 +20,11 @@ public sealed partial class CatalogStore
         var stage = Path.Combine(parent, ".histosets-import-" + Guid.NewGuid().ToString("N"));
         try
         {
-            using (var candidate = new CatalogStore(stage)) candidate.ImportLegacy(xmlPath, sourceDirectory, readMetadata);
+            using (var candidate = new CatalogStore(stage))
+            {
+                candidate.RenameCatalog(DefaultCatalogName(targetDirectory));
+                candidate.ImportLegacy(xmlPath, sourceDirectory, readMetadata);
+            }
             RequireEmpty(targetDirectory);
             if (Directory.Exists(targetDirectory)) Directory.Delete(targetDirectory, recursive: false);
             Directory.Move(stage, targetDirectory);
@@ -117,7 +121,7 @@ public sealed partial class CatalogStore
                         var materialId = Id("material/" + group.Key);
                         var materialImage = Id("material-image/" + group.Key);
                         Insert("materials", materialId, ("kind", "image"));
-                        Insert("material_images", materialImage, ("material_id", materialId), ("image_id", StorageFiles.Id("image/" + asset.Hash)), ("sort_order", 0));
+                        Insert("material_images", materialImage, ("material_id", materialId), ("image_id", StorageFiles.Id("image/" + asset.Hash)), ("sort_order", 0), ("is_primary", 1));
                         for (var e = 0; e < specimen.Elements.Count; e++)
                         {
                             var element = specimen.Elements[e];
@@ -149,6 +153,8 @@ public sealed partial class CatalogStore
                             }
                         }
                     }
+                    RefreshImportedStatuses(connection, transaction);
+                    TouchCatalog(connection, transaction, now);
                     transaction.Commit();
                 }
                 Validate(connection);

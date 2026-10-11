@@ -23,8 +23,11 @@ internal static class Program
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "histosets-smoke-" + Guid.NewGuid());
         Directory.CreateDirectory(temp);
         var previousDirectory = Environment.CurrentDirectory;
+        var previousSettingsDirectory = Environment.GetEnvironmentVariable("HISTOSETS_SETTINGS_DIRECTORY");
         try
         {
+            // Never read or overwrite the developer's selected catalog or language.
+            Environment.SetEnvironmentVariable("HISTOSETS_SETTINGS_DIRECTORY", System.IO.Path.Combine(temp, "settings"));
             // Reproduce launching a portable build from a shortcut with another working folder.
             Environment.CurrentDirectory = temp;
             var app = new App();
@@ -93,6 +96,7 @@ internal static class Program
             SaveScreenshot(window, System.IO.Path.Combine(output, "native-view.png"));
             var materialId = ((AtlasSpecimen)specimens.SelectedItem).MaterialId;
             var elementId = ((AtlasElement)elements.SelectedItem).Id;
+            Check(specimens.Items.Cast<AtlasSpecimen>().All(s => s.IsPrimaryImage), "Each object card opens its designated primary image");
             language.SelectedIndex = 0;
             WaitImage(window);
             Check(((AtlasSpecimen)specimens.SelectedItem).MaterialId == materialId && ((AtlasElement)elements.SelectedItem).Id == elementId, "Language switch preserves selected material and element");
@@ -107,6 +111,24 @@ internal static class Program
             WaitImage(window);
             Check(((AtlasSpecimen)specimens.SelectedItem).MaterialId == materialId && image.Source is BitmapSource loadedLatest && loadedLatest.PixelWidth == 1968, "Rapid selection displays only the last requested image");
             elements.SelectedIndex = 0;
+            var contourPoints = canvas.Children.OfType<Polygon>().Select(p => p.Points.ToArray()).ToArray();
+            Click(window, "ActualSizeButton");
+            var imageScale = (ScaleTransform)window.FindName("ImageScale");
+            Check(Math.Abs(imageScale.ScaleX - 1) < .001 && Math.Abs(imageScale.ScaleY - 1) < .001, "100 percent displays one image pixel per logical display unit");
+            Click(window, "ZoomInButton");
+            Check(imageScale.ScaleX > 1 && ((Border)window.FindName("OverviewBorder")).IsVisible, "Zoom exposes a navigation overview for the enlarged image");
+            var outline = (CheckBox)window.FindName("OutlineToggle");
+            outline.IsChecked = false;
+            Check(!canvas.Children.OfType<Polygon>().Any(p => p.IsVisible), "Outline switch hides selected contours");
+            outline.IsChecked = true;
+            ((Slider)window.FindName("OutlineOpacity")).Value = .7;
+            ((Slider)window.FindName("OutlineHue")).Value = 0;
+            var presentedContours = canvas.Children.OfType<Polygon>().ToArray();
+            Check(presentedContours.Length == contourPoints.Length && presentedContours.Where((p, i) => !p.Points.SequenceEqual(contourPoints[i])).Any() == false
+                && presentedContours.All(p => p.IsVisible) && ((AtlasElement)elements.SelectedItem).Id == elementId,
+                "Zoom and contour presentation retain original coordinates and selected element");
+            Click(window, "FitButton");
+            Check(imageScale.ScaleX > 0 && imageScale.ScaleX < 1, "Fit returns the baseline image to the available viewport");
 
             var selected = (AtlasSpecimen)specimens.SelectedItem;
             var loaded = ImageLoader.Load(selected.ImagePath);
@@ -142,7 +164,63 @@ internal static class Program
             preview.Close();
             window.Close();
 
+            var home = new HomeWindow(sourceDirectory: null, catalogDirectory: "", rememberLocation: false);
+            home.Show();
+            Pump();
+            Check(home.SelectedCatalogDirectory is null && !((Button)home.FindName("ViewButton")).IsEnabled,
+                "Home starts with no selected database and cannot open the viewer");
+            Check(!((Button)home.FindName("SelfTestButton")).IsEnabled && !((Button)home.FindName("EditButton")).IsEnabled,
+                "Home does not offer unfinished editor and self-test modes");
+            Click(home, "LanguageButton");
+            Check(Equals(((Button)home.FindName("ViewButton")).Content, "View")
+                && ((TextBlock)home.FindName("CatalogName")).Text == "No database selected"
+                && File.ReadAllText(System.IO.Path.Combine(temp, "settings", "language.txt")).Trim() == "en",
+                "Language switch updates home UI and persists the preference outside the catalog");
+            SaveScreenshot(home, System.IO.Path.Combine(output, "native-home-empty.png"));
+            home.Close();
+
+            home = new HomeWindow(sourceDirectory: null, catalogDirectory: catalogRoot, rememberLocation: false);
+            home.Show();
+            WaitHome(home);
+            Check(Equals(((Button)home.FindName("ViewButton")).Content, "View")
+                && home.SelectedCatalogDirectory == catalogRoot
+                && ((TextBlock)home.FindName("CatalogStatistics")).Text == "Objects: 5"
+                && !string.IsNullOrWhiteSpace(((TextBlock)home.FindName("CatalogModified")).Text),
+                "Home reopens the chosen catalog with its object count, modification date and selected UI language");
+            var borrowedViewerReady = false;
+            home.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                var borrowedViewer = Application.Current.Windows.OfType<MainWindow>().SingleOrDefault();
+                if (borrowedViewer is not null)
+                {
+                    var borrowedSpecimens = (ListBox)borrowedViewer.FindName("ListOfSpecimens");
+                    borrowedViewerReady = borrowedSpecimens.Items.Count == 5
+                        && ((ComboBox)borrowedViewer.FindName("LanguageSelector")).SelectedIndex == 1;
+                    borrowedViewer.Close();
+                }
+            }));
+            Click(home, "ViewButton");
+            Check(borrowedViewerReady, "Viewer opened from home uses the shared catalog and global language");
+            Check(((Button)home.FindName("ViewButton")).IsEnabled && ((TextBlock)home.FindName("CatalogStatistics")).Text == "Objects: 5",
+                "Closing a borrowed viewer leaves the home catalog open and readable");
+            Click(home, "LanguageButton");
+            SaveScreenshot(home, System.IO.Path.Combine(output, "native-home-catalog.png"));
+            home.Close();
+
+            var emptyRoot = System.IO.Path.Combine(temp, "empty-catalog");
+            using (var empty = new CatalogStore(emptyRoot)) empty.RenameCatalog("Пустая учебная база");
+            home = new HomeWindow(sourceDirectory: null, catalogDirectory: emptyRoot, rememberLocation: false);
+            home.Show();
+            WaitHome(home);
+            Check(((TextBlock)home.FindName("CatalogName")).Text == "Пустая учебная база"
+                && ((TextBlock)home.FindName("CatalogStatistics")).Text == "Объектов: 0",
+                "A newly created empty catalog opens without importing demonstration objects");
+            home.Close();
+
             var backupPath = System.IO.Path.Combine(temp, "native-backup.histosets");
+            Guid topicId;
+            Guid assignedTagId;
+            Guid analogGroupId;
             using (var data = new CatalogStore(catalogRoot))
             {
                 var statistics = data.GetStatistics();
@@ -156,16 +234,35 @@ internal static class Program
                 var tagWindow = new TagsWindow(data, selected.MaterialId, selected.Name, "ru");
                 tagWindow.Show();
                 Pump();
-                EditDictionaryDialog(tagWindow, "Создать…", "Тема", "Topic");
-                EditDictionaryDialog(tagWindow, "Создать тег…", "Эпителий", "Epithelium");
+                topicId = data.LoadTaxonomy().Groups.Single(g => g.IsSystem && g.Code == "topic").Id;
+                var groupList = (ListBox)tagWindow.FindName("GroupList");
+                groupList.SelectedValuePath = "Id";
+                groupList.SelectedValue = topicId;
+                Check(!((Button)tagWindow.FindName("EditGroupButton")).IsEnabled && !((Button)tagWindow.FindName("DeleteGroupButton")).IsEnabled,
+                    "Predefined tag types cannot be renamed or deleted in the native dictionary");
+                EditDictionaryDialog(tagWindow, "NewTagButton", "Эпителий", "Epithelium");
                 var tagList = (ListBox)tagWindow.FindName("TagList");
+                ((TextBox)tagWindow.FindName("TagSearch")).Text = "EPITHELIUM";
+                Check(tagList.Items.Count == 1, "Tag value search finds an existing value through either translation");
                 tagList.UpdateLayout();
                 var checkBox = VisualChildren<CheckBox>(tagList).Single();
                 checkBox.IsChecked = true;
                 Pump();
                 SaveScreenshot(tagWindow, System.IO.Path.Combine(output, "native-tags.png"));
-                ((Button)tagWindow.FindName("SaveAssignments")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                Check(data.LoadTaxonomy().MaterialTags[selected.MaterialId!.Value].Count == 1, "Native dialog creates translated group/tag and saves material assignments");
+                Click(tagWindow, "SaveAssignments");
+                var taxonomy = data.LoadTaxonomy();
+                assignedTagId = taxonomy.MaterialTags[selected.MaterialId!.Value].Single();
+                Check(taxonomy.Tags.Single(t => t.Id == assignedTagId).GroupId == topicId,
+                    "Native dialog creates a translated value in a predefined type and saves its object assignment");
+
+                var analogWindow = new AnalogGroupsWindow(data, selected.MaterialId, selected.Name, "ru");
+                analogWindow.Show();
+                Pump();
+                EditDictionaryDialog(analogWindow, "NewGroupButton", "Учебные аналоги", "Teaching analogues");
+                Click(analogWindow, "SaveAssignmentButton");
+                analogGroupId = data.LoadAnalogGroups().Single().Id;
+                Check(data.Load().Specimens.Where(s => s.MaterialId == selected.MaterialId).All(s => s.AnalogGroupId == analogGroupId),
+                    "Native analogue dialog saves one group assignment shared by the object's translations");
                 data.CreateBackup(backupPath);
             }
             var filtered = new MainWindow(AppContext.BaseDirectory, catalogRoot);
@@ -173,13 +270,53 @@ internal static class Program
             Pump();
             ((Expander)filtered.FindName("TagFilterExpander")).IsExpanded = true;
             filtered.UpdateLayout();
-            var filterBox = ((StackPanel)filtered.FindName("TagFilters")).Children.OfType<CheckBox>().Single();
-            filterBox.IsChecked = true;
+            var typeSelector = (ComboBox)filtered.FindName("TagTypeSelector");
+            typeSelector.SelectedValuePath = "Id";
+            typeSelector.SelectedValue = topicId;
+            var valueSelector = (ComboBox)filtered.FindName("TagValueSelector");
+            valueSelector.SelectedValuePath = "Id";
+            valueSelector.SelectedValue = assignedTagId;
             var filteredList = (ListBox)filtered.FindName("ListOfSpecimens");
             Check(filteredList.Items.Count == 1 && ((AtlasSpecimen)filteredList.Items[0]).MaterialId == selected.MaterialId, "Saved tag filters the native catalog after restart");
+            Check(((AtlasSpecimen)filteredList.Items[0]).AnalogGroupId == analogGroupId
+                && ((AtlasSpecimen)filteredList.Items[0]).DisplayName.StartsWith("Учебные аналоги — ", StringComparison.Ordinal),
+                "Viewer displays the saved analogue group before the object's own name");
             filteredList.SelectedIndex = 0;
             WaitImage(filtered);
+            var assignmentDialogReady = false;
+            filtered.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                var assignmentDialog = Application.Current.Windows.OfType<TagsWindow>().SingleOrDefault();
+                if (assignmentDialog is not null)
+                {
+                    assignmentDialogReady = ((Button)assignmentDialog.FindName("SaveAssignments")).Visibility == Visibility.Visible
+                        && ((ListBox)assignmentDialog.FindName("TagList")).Items.Cast<TagsWindow.TagChoice>()
+                            .Any(tag => tag.Id == assignedTagId && tag.Assigned);
+                    assignmentDialog.Close();
+                }
+            }));
+            Click(filtered, "DictionaryButton");
+            Check(assignmentDialogReady, "Tags button opens assignment editing for the selected object with its saved tags");
+            WaitImage(filtered);
+            Click(filtered, "MaterialTagsButton");
+            var metadataWindow = Application.Current.Windows.OfType<INFO2>().Single();
+            var metadataPage = (TextBox)metadataWindow.FindName("Page");
+            Check(metadataPage.IsReadOnly && metadataPage.Text.Contains("Учебные аналоги", StringComparison.Ordinal)
+                && metadataPage.Text.Contains("Тема", StringComparison.Ordinal) && metadataPage.Text.Contains("Эпителий", StringComparison.Ordinal),
+                "Read-only object metadata includes its analogue group and assigned typed tags");
+            ((ComboBox)filtered.FindName("LanguageSelector")).SelectedIndex = 1;
+            WaitImage(filtered);
+            Check(metadataWindow.Title == "Object metadata" && metadataPage.Text.Contains("Teaching analogues", StringComparison.Ordinal)
+                && metadataPage.Text.Contains("Epithelium", StringComparison.Ordinal)
+                && Equals(((Button)filtered.FindName("MaterialTagsButton")).Content, "Metadata")
+                && filteredList.Items.Count == 1 && ((AtlasSpecimen)filteredList.SelectedItem).MaterialId == selected.MaterialId,
+                "Global language change translates the viewer and its open metadata window while retaining the selected object and filters");
+            metadataWindow.Close();
+            ((ComboBox)filtered.FindName("LanguageSelector")).SelectedIndex = 0;
+            WaitImage(filtered);
             SaveScreenshot(filtered, System.IO.Path.Combine(output, "native-catalog-filter.png"));
+            Click(filtered, "ResetFiltersButton");
+            Check(filteredList.Items.Count == 5, "Reset clears selected tag filters and restores all object cards");
             filtered.Close();
             File.Delete(selected.ImagePath);
             var damagedMedia = new MainWindow(AppContext.BaseDirectory, catalogRoot);
@@ -242,6 +379,7 @@ internal static class Program
             Environment.CurrentDirectory = previousDirectory;
             if (Application.Current is { } current)
                 foreach (var open in current.Windows.Cast<Window>().ToArray()) open.Close();
+            Environment.SetEnvironmentVariable("HISTOSETS_SETTINGS_DIRECTORY", previousSettingsDirectory);
             Directory.Delete(temp, true);
         }
     }
@@ -255,25 +393,48 @@ internal static class Program
             foreach (var nested in VisualChildren<T>(child)) yield return nested;
         }
     }
-    private static void EditDictionaryDialog(TagsWindow owner, string buttonTitle, string russian, string english)
+    private static void Click(Window window, string name)
+        => ((Button)window.FindName(name)).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+    private static void EditDictionaryDialog(Window owner, string buttonName, string russian, string english)
     {
+        Exception? failure = null;
         owner.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
         {
-            var dialog = Application.Current.Windows.Cast<Window>().Single(w => w.GetType().Name == "TaxonomyEditWindow");
-            dialog.UpdateLayout();
-            var fields = VisualChildren<TextBox>(dialog).ToArray();
-            fields[0].Text = russian;
-            fields[1].Text = english;
-            VisualChildren<Button>(dialog).Single(b => Equals(b.Content, "Сохранить")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var dialog = Application.Current.Windows.Cast<Window>().SingleOrDefault(w => w.GetType().Name == "TaxonomyEditWindow");
+            try
+            {
+                if (dialog is null) throw new Exception("Dictionary edit dialog did not open");
+                dialog.UpdateLayout();
+                var fields = VisualChildren<TextBox>(dialog).ToArray();
+                fields[0].Text = russian;
+                fields[1].Text = english;
+                VisualChildren<Button>(dialog).Single(b => Equals(b.Content, "Сохранить")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                if (dialog.IsVisible)
+                    throw new Exception("Dictionary edit did not save: " + string.Join(" | ", VisualChildren<TextBlock>(dialog).Select(t => t.Text)));
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+                dialog?.Close();
+            }
         }));
-        VisualChildren<Button>(owner).Single(b => Equals(b.Content, buttonTitle)).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Click(owner, buttonName);
         Pump();
+        if (failure is not null) throw failure;
     }
     private static void WaitImage(MainWindow window)
     {
         var deadline = DateTime.UtcNow.AddSeconds(20);
         while (!((Button)window.FindName("PreviewButton")).IsEnabled && ((TextBlock)window.FindName("ImageMessage")).Text != "Изображение недоступно" && DateTime.UtcNow < deadline) Pump();
         if (!((Button)window.FindName("PreviewButton")).IsEnabled) throw new Exception("Image did not load: " + ((TextBlock)window.FindName("StatusText")).Text);
+    }
+    private static void WaitHome(HomeWindow window)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while ((!((Button)window.FindName("ViewButton")).IsEnabled || !((Button)window.FindName("LanguageButton")).IsEnabled)
+            && DateTime.UtcNow < deadline) Pump();
+        if (window.SelectedCatalogDirectory is null || !((Button)window.FindName("ViewButton")).IsEnabled)
+            throw new Exception("Home could not open the catalog: " + ((TextBlock)window.FindName("StatusText")).Text);
     }
     private static void Check(bool condition, string name)
     {

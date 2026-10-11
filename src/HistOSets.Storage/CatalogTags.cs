@@ -15,9 +15,10 @@ public sealed partial class CatalogStore
             var groupNames = ReadNames(connection, "tag_group_translations", "group_id");
             var tagNames = ReadNames(connection, "tag_translations", "tag_id");
             var groups = new List<CatalogTagGroup>();
-            using (var command = Command(connection, "SELECT id FROM tag_groups WHERE deleted_utc IS NULL ORDER BY rowid;"))
+            using (var command = Command(connection, "SELECT id,code,is_system FROM tag_groups WHERE deleted_utc IS NULL ORDER BY is_system DESC,rowid;"))
             using (var reader = command.ExecuteReader())
-                while (reader.Read()) groups.Add(new(Guid.Parse(reader.GetString(0)), groupNames.GetValueOrDefault(reader.GetString(0)) ?? new Dictionary<string, string>()));
+                while (reader.Read()) groups.Add(new(Guid.Parse(reader.GetString(0)), groupNames.GetValueOrDefault(reader.GetString(0)) ?? new Dictionary<string, string>())
+                    { Code = reader.GetString(1), IsSystem = reader.GetBoolean(2) });
             var tags = new List<CatalogTag>();
             using (var command = Command(connection, "SELECT id, group_id FROM tags WHERE deleted_utc IS NULL ORDER BY rowid;"))
             using (var reader = command.ExecuteReader())
@@ -72,7 +73,11 @@ public sealed partial class CatalogStore
             var translations = group ? "tag_group_translations" : "tag_translations";
             var parent = group ? "group_id" : "tag_id";
             var id = existing ?? Guid.NewGuid();
+            if (group && existing is null) throw new CatalogStorageException("Типы тегов определены системой. Создайте значение в одном из существующих типов.");
             if (existing is not null) RequireActive(connection, transaction, table, id);
+            if (group) RequireEditableGroup(connection, transaction, id);
+            if (!group && groupId is null && (existing is null || Scalar(connection, "SELECT group_id FROM tags WHERE id=$id;", transaction, ("$id", id.ToString())) is string))
+                throw new CatalogStorageException("Выберите тип тега. Для остальных значений используйте «Прочее».");
             if (!group && groupId is { } g) RequireActive(connection, transaction, "tag_groups", g);
             using (var command = Command(connection, $"""
                 SELECT t.id, n.locale, n.name FROM {table} t JOIN {translations} n ON n.{parent} = t.id
@@ -166,6 +171,7 @@ public sealed partial class CatalogStore
         WriteTags((connection, transaction, now, _) =>
         {
             RequireActive(connection, transaction, "tag_groups", id);
+            RequireEditableGroup(connection, transaction, id);
             if (Convert.ToInt64(Scalar(connection, "SELECT COUNT(*) FROM tags WHERE group_id = $id AND deleted_utc IS NULL;", transaction, ("$id", id.ToString()))) > 0)
                 throw new CatalogStorageException("Сначала перенесите или удалите теги этой группы.");
             Execute(connection, """
@@ -182,6 +188,12 @@ public sealed partial class CatalogStore
             throw new CatalogStorageException("Запись не найдена или удалена. Обновите каталог.");
     }
 
+    private static void RequireEditableGroup(SqliteConnection connection, SqliteTransaction transaction, Guid id)
+    {
+        if (Convert.ToInt64(Scalar(connection, "SELECT is_system FROM tag_groups WHERE id=$id;", transaction, ("$id", id.ToString()))) == 1)
+            throw new CatalogStorageException("Системный тип тега нельзя переименовать или удалить.");
+    }
+
     private static void Touch(SqliteConnection connection, SqliteTransaction transaction, string table, Guid id, string now)
         => Execute(connection, $"UPDATE {table} SET modified_utc = $now, revision = revision + 1 WHERE id = $id;", transaction, ("$id", id.ToString()), ("$now", now));
 
@@ -195,11 +207,18 @@ public sealed partial class CatalogStore
                 using var connection = Open(DatabasePath, SqliteOpenMode.ReadWrite);
                 Validate(connection);
                 using var transaction = connection.BeginTransaction();
-                var result = operation(connection, transaction, StorageFiles.UtcNow(), (string)Scalar(connection, "SELECT catalog_id FROM catalog_metadata;", transaction)!);
+                var before = Convert.ToInt64(Scalar(connection, "SELECT total_changes();", transaction));
+                var now = StorageFiles.UtcNow();
+                var result = operation(connection, transaction, now, (string)Scalar(connection, "SELECT catalog_id FROM catalog_metadata;", transaction)!);
+                if (Convert.ToInt64(Scalar(connection, "SELECT total_changes();", transaction)) != before)
+                {
+                    DemoteIncompleteMaterials(connection, transaction, now);
+                    TouchCatalog(connection, transaction, now);
+                }
                 transaction.Commit();
                 return result;
             }
-            catch (SqliteException ex) { throw new CatalogStorageException("Не удалось сохранить теги. Изменения отменены.\n" + ex.Message, ex); }
+            catch (SqliteException ex) { throw new CatalogStorageException("Не удалось сохранить изменения каталога. Изменения отменены.\n" + ex.Message, ex); }
         }
     }
 }
