@@ -235,9 +235,26 @@ internal static class FoundationChecks
                         using var reader=command.ExecuteReader();
                         while(reader.Read()) points.Add((reader.GetString(0),RegionGeometryCodec.Deserialize(reader.GetString(1))));
                     }
+                    // Build the legacy fixture as one batch; per-vertex autocommit causes
+                    // thousands of durable disk flushes, especially expensive on Windows.
+                    using var transaction=connection.BeginTransaction();
+                    using var insert=connection.CreateCommand();
+                    insert.Transaction=transaction;
+                    insert.CommandText="INSERT INTO region_points VALUES($id,$ordinal,$x,$y);";
+                    insert.Parameters.Add("$id",SqliteType.Text);
+                    insert.Parameters.Add("$ordinal",SqliteType.Integer);
+                    insert.Parameters.Add("$x",SqliteType.Real);
+                    insert.Parameters.Add("$y",SqliteType.Real);
                     foreach(var region in points)
                         for(var i=0;i<region.Geometry.Points.Count;i++)
-                            Execute(connection,"INSERT INTO region_points VALUES($id,$ordinal,$x,$y);",("$id",region.Id),("$ordinal",i),("$x",region.Geometry.Points[i].X),("$y",region.Geometry.Points[i].Y));
+                        {
+                            insert.Parameters["$id"].Value=region.Id;
+                            insert.Parameters["$ordinal"].Value=i;
+                            insert.Parameters["$x"].Value=region.Geometry.Points[i].X;
+                            insert.Parameters["$y"].Value=region.Geometry.Points[i].Y;
+                            insert.ExecuteNonQuery();
+                        }
+                    transaction.Commit();
                     continue;
                 }
                 var columns = Columns(connection, table);
