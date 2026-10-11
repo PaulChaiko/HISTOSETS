@@ -131,3 +131,56 @@ test('host language changes preserve image, outlines, selection and drawing tool
   await expect(page.locator('#hint')).toContainText('Нажмите и протяните');
   expect(await snapshot(page)).toEqual(before);
 });
+
+test('compound regions preserve holes, islands, zoom, selection and visibility', async ({ page, request }) => {
+  const atlas = await (await request.get('/fixtures/atlas.json')).json();
+  const rings = [
+    [[600, 400], [1300, 400], [1300, 1100], [600, 1100]],
+    [[800, 600], [1100, 600], [1100, 900], [800, 900]],
+    [[1400, 400], [1600, 400], [1600, 600], [1400, 600]]
+  ];
+  await load(page, { ...atlas[0], elements: [{ id: 'holes', name: 'Область с отверстием', polygons: [],
+    regions: [{ id: 'compound-1', kind: 'compound', fillRule: 'evenodd', rings }] }] });
+  const path = page.locator('#compound-regions path');
+  await expect(path).toHaveCount(1);
+  await expect(path).toHaveAttribute('fill-rule', 'evenodd');
+  expect((await snapshot(page)).annotations).toEqual([]);
+  expect((await snapshot(page)).compoundRegions[0].rings).toEqual(rings);
+  await expect(page.locator('#status')).toContainText('областей: 1');
+  // Test the browser's real SVG fill, then rasterize that same SVG path. Inner
+  // contours must be transparent, while the enclosing ring and island are filled.
+  const alpha = await path.evaluate(async path => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svg.setAttribute('width', '1800'); svg.setAttribute('height', '1300');
+    const copy = path.cloneNode(true); copy.setAttribute('fill-opacity', '1');
+    svg.append(copy);
+    const image = new Image();
+    image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+    await image.decode();
+    const canvas = document.createElement('canvas'); canvas.width = 1800; canvas.height = 1300;
+    const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
+    return { fill: [[650, 450], [950, 750], [1500, 450], [20, 20]].map(([x, y]) => path.isPointInFill(new DOMPoint(x, y))),
+      alpha: [[650, 450], [950, 750], [1500, 450], [20, 20]].map(([x, y]) => context.getImageData(x, y, 1, 1).data[3]) };
+  });
+  expect(alpha).toEqual({ fill: [true, false, true, false], alpha: [255, 0, 255, 0] });
+  const before = await page.locator('#compound-regions g').getAttribute('transform');
+  await page.getByRole('button', { name: 'Приблизить', exact: true }).click();
+  await expect(page.locator('#compound-regions g')).not.toHaveAttribute('transform', before);
+  expect((await snapshot(page)).compoundRegions[0].rings).toEqual(rings);
+  await page.locator('#elements button').click();
+  await expect(path).toHaveAttribute('fill', '#ffd166');
+  await expect(page.locator('#selection')).toContainText('областей: 1');
+  await page.locator('#opacity').fill('60');
+  await expect(path).toHaveAttribute('fill-opacity', '0.6');
+  await page.locator('#overlays').uncheck();
+  await expect(page.locator('#compound-regions')).toBeHidden();
+  await page.locator('#overlays').check();
+  await expect(page.locator('#compound-regions')).toBeVisible();
+  await page.evaluate(() => window.histosetsPreview.setLocale('en'));
+  await expect(page.locator('#status')).toContainText('regions: 1');
+  await page.screenshot({ path: '../artifacts/viewer-compound.png' });
+  await load(page, { ...atlas[0], elements: [] });
+  await expect(path).toHaveCount(0);
+  expect((await snapshot(page)).compoundRegions).toEqual([]);
+});

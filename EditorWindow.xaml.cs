@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -27,6 +28,9 @@ public partial class EditorWindow : Window
     private Guid? selectedImageId;
     private Guid? selectedElementId;
     private string? displayedImagePath;
+    private RegionGeometry? measuredGeometry;
+    private ImageCalibration? measuredCalibration;
+    private RegionMeasurement? measuredValue;
     private CatalogTaxonomy taxonomy = CatalogTaxonomy.Empty;
     private IReadOnlyList<CatalogAnalogGroup> analogs = [];
     private Func<string>? statusMessage;
@@ -47,6 +51,8 @@ public partial class EditorWindow : Window
         Surface.RegionsChanged += Surface_RegionsChanged;
         Surface.SelectionChanged += (_, _) => RefreshRegionSelection();
         Surface.PendingOperationChanged += (_, _) => UpdateState();
+        Surface.OperationFailed += (_, _) => SetStatus("Не удалось применить мазок. Исходная область сохранена; попробуйте более короткий мазок или другой радиус.",
+            "The stroke could not be applied. The original region is preserved; try a shorter stroke or a different radius.");
         selectedImageId = draft.Images.FirstOrDefault(i => i.IsPrimary)?.Id ?? draft.Images.FirstOrDefault()?.Id;
         selectedElementId = draft.Elements.FirstOrDefault()?.Id;
         initialized = true;
@@ -230,7 +236,7 @@ public partial class EditorWindow : Window
     private static string GeometryName(string kind) => kind switch
     {
         "rectangle" => T("Прямоугольник", "Rectangle"), "ellipse" => T("Эллипс", "Ellipse"),
-        "polygon" => T("Полигон", "Polygon"), _ => kind
+        "polygon" => T("Полигон", "Polygon"), "compound" => T("Составная область", "Compound region"), _ => kind
     };
 
     private void RefreshRegionSelection()
@@ -250,18 +256,68 @@ public partial class EditorWindow : Window
         RedoButton.IsEnabled = redo.Count > 0;
         PrimaryImageButton.IsEnabled = SelectedImage is { IsPrimary: false };
         RemoveImageButton.IsEnabled = SelectedImage is not null;
+        CalibrationButton.IsEnabled = SelectedImage?.Metadata is not null;
         DeleteElementButton.IsEnabled = SelectedElement is not null;
         DeleteRegionButton.IsEnabled = Surface.SelectedRegionId is not null && !Surface.HasPendingOperation;
-        FinishPolygonButton.IsEnabled = CancelPolygonButton.IsEnabled = Surface.HasPendingOperation;
-        RectangleTool.IsEnabled = EllipseTool.IsEnabled = PolygonTool.IsEnabled = SelectTool.IsEnabled = Surface.CanEdit;
-        CanvasHint.Text = Surface.HasPendingOperation
+        FinishPolygonButton.IsEnabled = Surface.HasPendingPolygon;
+        CancelPolygonButton.IsEnabled = Surface.HasPendingOperation;
+        RectangleTool.IsEnabled = EllipseTool.IsEnabled = PolygonTool.IsEnabled = SelectTool.IsEnabled = BrushTool.IsEnabled = Surface.CanEdit;
+        EraserTool.IsEnabled = Surface.CanEdit && Surface.SelectedRegionId is not null;
+        NewRegionButton.IsEnabled = Surface.CanEdit;
+        BrushRadiusInput.IsEnabled = Surface.CanEdit;
+        RefreshMeasurements();
+        CanvasHint.Text = Surface.HasPendingPolygon
             ? T("Контур ещё не завершён. Enter или «Завершить» — сохранить контур; Esc — отменить его. Масштаб меняется колесом мыши.",
                 "The contour is unfinished. Enter or Finish completes it; Esc cancels it. Use the mouse wheel to zoom.")
             : SelectedImage is null ? T("Добавьте изображение. Его оригинал будет скопирован в каталог при сохранении.", "Add an image. Its original will be copied into the catalog when you save.")
             : SelectedElement is null ? T("Добавьте или выберите элемент, чтобы нанести его области. Колесо мыши — масштаб; «Перемещение» — панорамирование.",
                 "Add or select an element to draw its regions. Mouse wheel: zoom; Pan: move the image.")
+            : Surface.Tool is RegionEditorTool.Brush or RegionEditorTool.Eraser
+                ? T("Кисть добавляет к выбранной области; «Новая область кистью» начинает отдельную. Ластик вычитает только из выбранной области, включая отверстия. Отпустите кнопку мыши, чтобы закончить мазок; Esc отменяет его.",
+                    "Brush adds to the selected region; New brush region starts a separate one. Eraser subtracts only from the selected region and can create holes. Release the mouse button to finish a stroke; Esc cancels it.")
             : T("Показаны области выбранного элемента на текущем изображении. Выбор: перемещение фигуры и её узлов. Полигон: щелчки, затем Enter. Esc отменяет незавершённое действие.",
                 "Regions belong to the selected element and current image. Select: move a shape or its handles. Polygon: click vertices, then Enter. Esc cancels the current operation.");
+    }
+
+    private static CultureInfo DisplayCulture => CultureInfo.GetCultureInfo(UiLanguage.Locale == "ru" ? "ru-RU" : "en-US");
+    private static string Number(double value) => value.ToString("G4", DisplayCulture);
+    private static string CalibrationUnit(ImageCalibration calibration) => calibration.InputUnit is "m" or "cm" or "mm" or "nm" ? calibration.InputUnit : "um";
+    private static double MetresPerUnit(string unit) => unit switch { "m" => 1, "cm" => 1e-2, "mm" => 1e-3, "nm" => 1e-9, _ => 1e-6 };
+
+    private void RefreshMeasurements()
+    {
+        var calibration = SelectedImage?.Calibration;
+        var unit = calibration is null ? "px" : CalibrationUnit(calibration);
+        var unitLabel = calibration is null ? "px" : ImageCalibrationDialog.UnitLabel(unit);
+        var metresPerUnit = MetresPerUnit(unit);
+        var scaleX = calibration is null ? 1 : calibration.PixelSizeXMetres / metresPerUnit;
+        var scaleY = calibration is null ? 1 : calibration.PixelSizeYMetres / metresPerUnit;
+        CalibrationSummary.Text = SelectedImage is null ? "" : calibration is null
+            ? T("Калибровка не задана: измерения в пикселях оригинала.", "No calibration: measurements use original image pixels.")
+            : T($"Масштаб изображения: X ≈ {Number(scaleX)} {unitLabel}/px; Y ≈ {Number(scaleY)} {unitLabel}/px.",
+                $"Image scale: X ≈ {Number(scaleX)} {unitLabel}/px; Y ≈ {Number(scaleY)} {unitLabel}/px.");
+        var region = SelectedElement?.Regions.FirstOrDefault(r => r.MaterialImageId == selectedImageId && r.Id == Surface.SelectedRegionId);
+        if (region is null)
+        {
+            MeasurementSummary.Text = T("Выберите область для расчёта площади и периметра.", "Select a region to calculate its area and perimeter.");
+            return;
+        }
+        try
+        {
+            if (!ReferenceEquals(measuredGeometry, region.Geometry) || !ReferenceEquals(measuredCalibration, calibration) || measuredValue is null)
+            {
+                measuredValue = RegionMeasurements.Measure(region.Geometry, scaleX, scaleY);
+                measuredGeometry = region.Geometry;
+                measuredCalibration = calibration;
+            }
+            var measurement = measuredValue.Value;
+            MeasurementSummary.Text = T($"Площадь ≈ {Number(measurement.Area)} {unitLabel}² · Периметр ≈ {Number(measurement.Perimeter)} {unitLabel}",
+                $"Area ≈ {Number(measurement.Area)} {unitLabel}² · Perimeter ≈ {Number(measurement.Perimeter)} {unitLabel}");
+        }
+        catch (ArgumentException)
+        {
+            MeasurementSummary.Text = T("Не удалось рассчитать размеры этой области.", "Measurements are unavailable for this region.");
+        }
     }
 
     private void Form_TextChanged(object sender, TextChangedEventArgs e) { if (initialized && !rendering) UpdateState(); }
@@ -342,6 +398,21 @@ public partial class EditorWindow : Window
         Change(() => { foreach (var candidate in draft.Images) candidate.IsPrimary = candidate.Id == image.Id; });
     }
 
+    private void Calibration_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedImage is not { Metadata: { } metadata } image || !ResolvePending()) return;
+        FlushFields();
+        var dialog = new ImageCalibrationDialog(metadata.Width, metadata.Height, image.Calibration) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+        Change(() => image.Calibration = dialog.Calibration, render: false);
+        SetStatus(dialog.Calibration is null
+                ? "Калибровка удалена из рабочей копии. Сохраните объект, чтобы записать изменение."
+                : "Калибровка применена к текущему изображению в рабочей копии. Сохраните объект, чтобы записать изменение.",
+            dialog.Calibration is null
+                ? "Calibration removed from the working copy. Save the object to store this change."
+                : "Calibration applied to the current image in the working copy. Save the object to store this change.");
+    }
+
     private void RemoveImage_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedImage is not { } image || !ResolvePending()) return;
@@ -379,8 +450,9 @@ public partial class EditorWindow : Window
     {
         if (!initialized || rendering) return;
         var next = sender == RectangleTool ? RegionEditorTool.Rectangle : sender == EllipseTool ? RegionEditorTool.Ellipse
-            : sender == PolygonTool ? RegionEditorTool.Polygon : sender == SelectTool ? RegionEditorTool.Select : RegionEditorTool.Pan;
-        if (Surface.HasPendingOperation && !ResolvePending())
+            : sender == PolygonTool ? RegionEditorTool.Polygon : sender == BrushTool ? RegionEditorTool.Brush
+            : sender == EraserTool ? RegionEditorTool.Eraser : sender == SelectTool ? RegionEditorTool.Select : RegionEditorTool.Pan;
+        if ((next is RegionEditorTool.Brush or RegionEditorTool.Eraser && !ApplyBrushRadius()) || Surface.HasPendingOperation && !ResolvePending())
         {
             rendering = true;
             try { ToolButton(Surface.Tool).IsChecked = true; } finally { rendering = false; }
@@ -395,8 +467,47 @@ public partial class EditorWindow : Window
     private RadioButton ToolButton(RegionEditorTool tool) => tool switch
     {
         RegionEditorTool.Rectangle => RectangleTool, RegionEditorTool.Ellipse => EllipseTool,
-        RegionEditorTool.Polygon => PolygonTool, RegionEditorTool.Select => SelectTool, _ => PanTool
+        RegionEditorTool.Polygon => PolygonTool, RegionEditorTool.Select => SelectTool,
+        RegionEditorTool.Brush => BrushTool, RegionEditorTool.Eraser => EraserTool, _ => PanTool
     };
+
+    private bool ApplyBrushRadius()
+    {
+        if (!ImageCalibrationDialog.TryPositiveNumber(BrushRadiusInput.Text, out var radius) || radius < 0.01 || radius > 1e9)
+        {
+            SetStatus("Радиус кисти и ластика должен быть числом от 0,01 до 1 000 000 000 пикселей оригинала. Предыдущий радиус не изменён.",
+                "Brush and eraser radius must be a number from 0.01 to 1,000,000,000 original image pixels. The previous radius is unchanged.");
+            return false;
+        }
+        Surface.BrushRadius = radius;
+        return true;
+    }
+
+    private void BrushRadius_LostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!initialized || rendering) return;
+        if (!ApplyBrushRadius()) BrushRadiusInput.Text = Surface.BrushRadius.ToString("G", DisplayCulture);
+    }
+
+    private void BrushRadius_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        if (ApplyBrushRadius()) Surface.Focus();
+    }
+
+    private void NewRegion_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Surface.CanEdit || !ApplyBrushRadius() || !ResolvePending()) return;
+        FlushFields();
+        Surface.BeginNewBrushRegion();
+        rendering = true;
+        try { BrushTool.IsChecked = true; }
+        finally { rendering = false; }
+        RefreshRegions();
+        Surface.Focus();
+        UpdateState();
+    }
 
     private void Surface_RegionsChanged(object? sender, RegionsChangedEventArgs e)
     {
@@ -420,14 +531,18 @@ public partial class EditorWindow : Window
     private bool ResolvePending()
     {
         if (!Surface.HasPendingOperation) return true;
-        var prompt = new EditorPendingPrompt { Owner = this };
+        var prompt = new EditorPendingPrompt(Surface.HasPendingPolygon) { Owner = this };
         prompt.ShowDialog();
         if (prompt.Decision == EditorPendingDecision.CancelStroke) Surface.CancelPendingOperation();
         else if (prompt.Decision == EditorPendingDecision.Finish) Surface.FinishPolygon();
         if (Surface.HasPendingOperation)
         {
-            SetStatus("Завершите контур (не менее трёх разных точек) или отмените его. Незавершённый контур не сохранён.",
-                "Finish the contour (at least three distinct vertices) or cancel it. The unfinished contour has not been saved.");
+            if (Surface.HasPendingPolygon)
+                SetStatus("Завершите контур (не менее трёх разных точек) или отмените его. Незавершённый контур не сохранён.",
+                    "Finish the contour (at least three distinct vertices) or cancel it. The unfinished contour has not been saved.");
+            else
+                SetStatus("Завершите действие на холсте или отмените его. Незавершённое действие не сохранено.",
+                    "Complete the action on the canvas or cancel it. The unfinished action has not been saved.");
             return false;
         }
         return prompt.Decision != EditorPendingDecision.Continue;
@@ -627,10 +742,22 @@ public partial class EditorWindow : Window
         AddImageButton.Content = T("Добавить изображение…", "Add image…");
         PrimaryImageButton.Content = T("Сделать основным", "Set as primary");
         RemoveImageButton.Content = T("Удалить изображение", "Remove image");
+        CalibrationButton.Content = T("Калибровка…", "Calibration…");
+        CalibrationButton.ToolTip = T("Известные физические размеры всего изображения. DPI не используется.", "Known physical dimensions of the whole image. DPI is not used.");
         PanTool.Content = T("Перемещение", "Pan"); SelectTool.Content = T("Выбор / правка", "Select / edit");
         RectangleTool.Content = T("Прямоугольник", "Rectangle"); EllipseTool.Content = T("Эллипс", "Ellipse"); PolygonTool.Content = T("Полигон", "Polygon");
+        BrushTool.Content = T("Кисть", "Brush"); EraserTool.Content = T("Ластик", "Eraser");
+        BrushRadiusLabel.Text = T("Радиус кисти / ластика (px):", "Brush / eraser radius (px):");
+        BrushRadiusInput.ToolTip = T("Радиус в пикселях оригинала; при изменении масштаба не меняется. Допустимы точка или запятая.",
+            "Radius in original image pixels; zoom does not change it. A decimal point or comma is accepted.");
+        System.Windows.Automation.AutomationProperties.SetName(BrushRadiusInput, BrushRadiusLabel.Text);
+        NewRegionButton.Content = T("Новая область кистью", "New brush region");
+        NewRegionButton.ToolTip = T("Снять выделение и начать отдельную область кистью. Существующие области сохраняются.",
+            "Clear the selection and start a separate brush region. Existing regions are preserved.");
+        MeasurementSummary.ToolTip = T("Расчёт по нанесённому контуру, а не оценка точности. Площадь исключает отверстия; периметр включает их границы. Значения показаны примерно с четырьмя значащими цифрами.",
+            "Calculated from the drawn contour, not an accuracy estimate. Area excludes holes; perimeter includes their boundaries. Values are shown to about four significant figures.");
         FitButton.Content = T("Вписать", "Fit"); ActualSizeButton.ToolTip = T("Один пиксель изображения на единицу экрана", "One image pixel per screen unit");
-        FinishPolygonButton.Content = T("Завершить", "Finish"); CancelPolygonButton.Content = T("Отменить контур", "Cancel contour");
+        FinishPolygonButton.Content = T("Завершить", "Finish"); CancelPolygonButton.Content = T("Отменить действие", "Cancel action");
         DeleteRegionButton.Content = T("Удалить область", "Delete region");
         ObjectTab.Header = T("Объект", "Object"); ElementsTab.Header = T("Элементы", "Elements"); MetadataTab.Header = T("Метаданные", "Metadata");
         MaterialHelp.Text = T("Черновик допускает неполные данные. Для готовности заполните все поля RU и EN, добавьте основное изображение и описания элементов.",
@@ -682,18 +809,22 @@ internal enum EditorPendingDecision { Continue, Finish, CancelStroke }
 internal sealed class EditorPendingPrompt : Window
 {
     public EditorPendingDecision Decision { get; private set; }
-    public EditorPendingPrompt()
+    public EditorPendingPrompt(bool canFinish = true)
     {
         NameScope.SetNameScope(this, new NameScope());
-        Title = UiLanguage.T("Незавершённый контур", "Unfinished contour");
+        Title = canFinish ? UiLanguage.T("Незавершённый контур", "Unfinished contour") : UiLanguage.T("Незавершённое действие", "Unfinished action");
         Width = 550; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var panel = new StackPanel { Margin = new Thickness(20) };
-        panel.Children.Add(new TextBlock { Text = UiLanguage.T("Перед продолжением завершите контур либо отмените его. Незавершённые точки не записываются в базу данных.",
-            "Finish the contour or cancel it before continuing. Unfinished vertices are never written to the database."), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 18) });
+        panel.Children.Add(new TextBlock { Text = canFinish
+            ? UiLanguage.T("Перед продолжением завершите контур либо отмените его. Незавершённые точки не записываются в базу данных.",
+                "Finish the contour or cancel it before continuing. Unfinished vertices are never written to the database.")
+            : UiLanguage.T("Отмените незавершённое действие либо вернитесь к холсту, чтобы закончить его. Изменения текущего жеста ещё не сохранены.",
+                "Cancel the unfinished action or return to the canvas to complete it. Changes from the current gesture have not been saved."),
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 18) });
         var actions = new WrapPanel();
-        Add("PromptFinishButton", UiLanguage.T("Завершить контур", "Finish contour"), EditorPendingDecision.Finish);
-        Add("PromptCancelStrokeButton", UiLanguage.T("Отменить контур", "Cancel contour"), EditorPendingDecision.CancelStroke);
+        if (canFinish) Add("PromptFinishButton", UiLanguage.T("Завершить контур", "Finish contour"), EditorPendingDecision.Finish);
+        Add("PromptCancelStrokeButton", UiLanguage.T("Отменить действие", "Cancel action"), EditorPendingDecision.CancelStroke);
         Add("PromptContinueButton", UiLanguage.T("Вернуться", "Go back"), EditorPendingDecision.Continue);
         panel.Children.Add(actions); Content = panel;
         void Add(string name, string label, EditorPendingDecision decision)

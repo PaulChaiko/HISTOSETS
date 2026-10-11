@@ -29,6 +29,7 @@
                         <Button x:Name="AddImageButton" Click="AddImage_Click"/>
                         <Button x:Name="PrimaryImageButton" Click="PrimaryImage_Click"/>
                         <Button x:Name="RemoveImageButton" Click="RemoveImage_Click"/>
+                        <Button x:Name="CalibrationButton" Click="Calibration_Click"/>
                     </WrapPanel>
                     <WrapPanel Margin="0,0,0,7">
                         <RadioButton x:Name="PanTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5" IsChecked="True"/>
@@ -36,6 +37,13 @@
                         <RadioButton x:Name="RectangleTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
                         <RadioButton x:Name="EllipseTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
                         <RadioButton x:Name="PolygonTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
+                        <RadioButton x:Name="BrushTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
+                        <RadioButton x:Name="EraserTool" GroupName="Tool" Checked="Tool_Checked" Margin="0,0,10,5"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,0,0,7" VerticalAlignment="Center">
+                        <TextBlock x:Name="BrushRadiusLabel" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="BrushRadiusInput" Text="16" Width="66" VerticalContentAlignment="Center" Margin="0,0,10,0" LostKeyboardFocus="BrushRadius_LostFocus" KeyDown="BrushRadius_KeyDown"/>
+                        <Button x:Name="NewRegionButton" Click="NewRegion_Click"/>
                     </WrapPanel>
                     <WrapPanel Margin="0,0,0,7">
                         <Button x:Name="ZoomOutButton" Content="−" Click="ZoomOut_Click"/>
@@ -47,7 +55,11 @@
                         <Button x:Name="DeleteRegionButton" Click="DeleteRegion_Click"/>
                     </WrapPanel>
                 </StackPanel>
-                <TextBlock DockPanel.Dock="Bottom" x:Name="CanvasHint" TextWrapping="Wrap" Margin="3,7,3,0" Foreground="#555555"/>
+                <StackPanel DockPanel.Dock="Bottom" Margin="3,7,3,0">
+                    <TextBlock x:Name="MeasurementSummary" TextWrapping="Wrap" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="CalibrationSummary" TextWrapping="Wrap" Margin="0,3,0,0" Foreground="#555555"/>
+                    <TextBlock x:Name="CanvasHint" TextWrapping="Wrap" Margin="0,5,0,0" Foreground="#555555"/>
+                </StackPanel>
                 <Border BorderBrush="#62527D" BorderThickness="1" Background="#17151B">
                     <controls:RegionEditorSurface x:Name="Surface"/>
                 </Border>

@@ -41,7 +41,8 @@ public sealed class MaterialImageDraft
     public string? ManagedPath { get; set; }
     public ImageMetadata? Metadata { get; set; }
     public bool IsPrimary { get; set; }
-    public MaterialImageDraft Clone() => new() { Id = Id, ImageId = ImageId, SourcePath = SourcePath, SourceSha256 = SourceSha256, ManagedPath = ManagedPath, Metadata = Metadata, IsPrimary = IsPrimary };
+    public ImageCalibration? Calibration { get; set; }
+    public MaterialImageDraft Clone() => new() { Id = Id, ImageId = ImageId, SourcePath = SourcePath, SourceSha256 = SourceSha256, ManagedPath = ManagedPath, Metadata = Metadata, IsPrimary = IsPrimary, Calibration = Calibration };
 }
 
 public sealed class MaterialElementDraft

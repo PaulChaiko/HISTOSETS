@@ -141,4 +141,5 @@ if (args.Length > 0)
     Check(baseline.Specimens.SelectMany(s => s.Elements).Sum(e => e.Polygons.Count) == 66, "Baseline: 66 polygons");
     Check(baseline.Warnings.Count == 0, "Baseline XML and file references valid");
 }
+AdvancedGeometryChecks.Run(Check);
 Console.WriteLine($"{count} checks passed.");

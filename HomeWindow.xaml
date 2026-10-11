@@ -1,7 +1,7 @@
 <Window x:Class="HistOSets.HomeWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="HISTOSETS — update5.2" Width="850" Height="810" MinWidth="640" MinHeight="640"
+        Title="HISTOSETS — update5.3" Width="850" Height="810" MinWidth="640" MinHeight="640"
         Background="{StaticResource BrandBackgroundBrush}" FontFamily="Segoe UI" FontSize="14"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="28">

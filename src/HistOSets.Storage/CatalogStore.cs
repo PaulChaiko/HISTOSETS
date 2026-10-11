@@ -48,7 +48,7 @@ public sealed partial class CatalogStore : IDisposable
             {
                 var backups = Path.Combine(RootDirectory, "BACKUPS");
                 Directory.CreateDirectory(backups);
-                var path = Path.Combine(backups, "before-schema3-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".histosets");
+                var path = Path.Combine(backups, "before-schema4-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".histosets");
                 // This snapshot must contain every referenced file before the first database write.
                 CreateBackup(path);
                 LastMigrationBackupPath = path;
@@ -57,7 +57,8 @@ public sealed partial class CatalogStore : IDisposable
                     using var connection = Open(DatabasePath, SqliteOpenMode.ReadWrite);
                     using var transaction = connection.BeginTransaction();
                     if (version == 1) ApplyVersion2(connection, transaction, DefaultCatalogName(RootDirectory));
-                    ApplyVersion3(connection, transaction);
+                    if (version < 3) ApplyVersion3(connection, transaction);
+                    ApplyVersion4(connection, transaction);
                     Validate(connection, transaction: transaction);
                     transaction.Commit();
                 }
@@ -129,6 +130,7 @@ public sealed partial class CatalogStore : IDisposable
                     {
                         MaterialId = Guid.Parse(material), ImageId = Guid.Parse(reader.GetString(6)), Locale = locale, ImageIssue = asset.Issue,
                         MaterialImageId = Guid.Parse(reader.GetString(5)), Status = reader.GetString(7), IsPrimaryImage = reader.GetBoolean(8),
+                        Calibration = ReadCalibration(connection, Guid.Parse(reader.GetString(5))),
                         AnalogGroupId = reader.IsDBNull(9) ? null : Guid.Parse(reader.GetString(9)),
                         AnalogGroupNames = reader.IsDBNull(9) ? new Dictionary<string,string>() : analogNames.GetValueOrDefault(reader.GetString(9)) ?? new Dictionary<string,string>()
                     });
@@ -159,7 +161,7 @@ public sealed partial class CatalogStore : IDisposable
             {
                 var geometry = RegionGeometryCodec.Deserialize(regionReader.GetString(1));
                 geometryRegions.Add(new(Guid.Parse(regionReader.GetString(0)),geometry));
-                polygons.Add(RegionGeometryCodec.ToPolygon(geometry));
+                if (geometry.Kind != "compound") polygons.Add(RegionGeometryCodec.ToPolygon(geometry));
             }
             elements.Add(new(reader.GetString(1), reader.GetString(2), reader.GetString(3), polygons) { Id = Guid.Parse(reader.GetString(0)), Regions = geometryRegions });
         }

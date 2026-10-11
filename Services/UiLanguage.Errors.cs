@@ -59,6 +59,8 @@ internal static partial class UiLanguage
 
     private static readonly (string Russian, string English)[] ErrorMessages =
     [
+        ("Некорректная физическая калибровка изображения.", "The image physical calibration is invalid."),
+        ("Калибровка не соответствует размерам исходного изображения. Задайте физические размеры заново.", "The calibration does not match the original image dimensions. Enter its physical dimensions again."),
         ("Повреждено описание области.", "The region description is damaged."),
         ("Повторно добавьте изображение: отсутствует контрольная сумма исходного файла.", "Add the image again: its source file checksum is missing."),
         ("Исходное изображение изменилось после добавления. Добавьте его заново и проверьте области.", "The source image has changed since it was added. Add it again and check its regions."),

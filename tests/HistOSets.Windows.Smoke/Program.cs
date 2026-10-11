@@ -220,6 +220,7 @@ internal static partial class Program
             var edited = CheckEditorWorkflow(home, selected.ImagePath, output);
             home.Close();
             CheckSavedEditorObject(emptyRoot, output, edited);
+            CheckAdvancedEditorWorkflow(temp, output);
 
             var backupPath = System.IO.Path.Combine(temp, "native-backup.histosets");
             Guid topicId;

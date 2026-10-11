@@ -1,4 +1,5 @@
 using System.IO;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -95,6 +96,7 @@ public partial class MainWindow : Window
         ResetFiltersButton.Content = T("Сбросить фильтры", "Reset filters");
         MaterialsLabel.Text = T("Объекты", "Objects");
         ElementsLabel.Text = T("Элементы объекта", "Object elements");
+        MeasurementsLabel.Text = T("Измерения областей", "Region measurements");
         TagFilterExpander.Header = T("Фильтры по тегам", "Tag filters");
         TagTypeLabel.Text = T("Тип тега — введите для поиска", "Tag type — type to search");
         TagValueLabel.Text = T("Значение — выберите для фильтра", "Value — select to filter");
@@ -340,6 +342,8 @@ public partial class MainWindow : Window
         OverviewBorder.Visibility = Visibility.Collapsed;
         image = null;
         AboutS.Text = AboutE.Text = SelectedTagsText.Text = LanguageStatus.Text = "";
+        MeasurementsText.Clear();
+        MeasurementsPanel.Visibility = Visibility.Collapsed;
         SInfo.IsEnabled = EInfo.IsEnabled = PreviewButton.IsEnabled = MaterialTagsButton.IsEnabled = false;
         WelcomeLogo.Visibility = Visibility.Visible;
         ImageMessage.Visibility = Visibility.Collapsed;
@@ -447,6 +451,8 @@ public partial class MainWindow : Window
         var element = CurrentElement;
         AboutE.Text = element is null ? "" : Fallback(element.Summary);
         EInfo.IsEnabled = element is not null && !string.IsNullOrWhiteSpace(element.Description);
+        MeasurementsText.Clear();
+        MeasurementsPanel.Visibility = Visibility.Collapsed;
         if (image is null || CurrentSpecimen is null) return;
         StatusText.Text = T($"{image.PixelWidth} × {image.PixelHeight} пикселей. Элементов: {CurrentSpecimen.Elements.Count}.", $"{image.PixelWidth} × {image.PixelHeight} pixels. Elements: {CurrentSpecimen.Elements.Count}.");
         if (element is null) return;
@@ -460,9 +466,10 @@ public partial class MainWindow : Window
                     "rectangle" => new Rectangle { Width = geometry.Width, Height = geometry.Height },
                     "ellipse" => new Ellipse { Width = geometry.Width, Height = geometry.Height },
                     "polygon" => new Polygon { Points = new PointCollection(geometry.Points.Select(p => new Point(p.X, p.Y))) },
+                    "compound" => new System.Windows.Shapes.Path { Data = CompoundPath(geometry) },
                     _ => throw new InvalidOperationException("Unsupported region geometry kind.")
                 };
-                if (geometry.Kind != "polygon")
+                if (geometry.Kind is "rectangle" or "ellipse")
                 {
                     Canvas.SetLeft(shape, geometry.X);
                     Canvas.SetTop(shape, geometry.Y);
@@ -479,7 +486,72 @@ public partial class MainWindow : Window
         }
         UpdateOutlineStyle();
         var count = element.Regions.Count > 0 ? element.Regions.Count : element.Polygons.Count;
+        RenderMeasurements(element);
         StatusText.Text = count == 0 ? T("Для этого элемента разметка пока не добавлена.", "This element has no regions yet.") : T($"{element.Name} — областей: {count}.", $"{element.Name} — regions: {count}.");
+    }
+
+    private static StreamGeometry CompoundPath(RegionGeometry geometry)
+    {
+        var path = new StreamGeometry { FillRule = FillRule.EvenOdd };
+        using (var context = path.Open())
+            foreach (var ring in geometry.Rings)
+            {
+                if (ring.Count == 0) continue;
+                context.BeginFigure(new Point(ring[0].X, ring[0].Y), true, true);
+                context.PolyLineTo(ring.Skip(1).Select(p => new Point(p.X, p.Y)).ToArray(), true, false);
+            }
+        path.Freeze();
+        return path;
+    }
+
+    private void RenderMeasurements(AtlasElement element)
+    {
+        if (CurrentSpecimen is not { } specimen || image is null) return;
+        var geometries = element.Regions.Count > 0 ? element.Regions.Select(region => region.Geometry)
+            : element.Polygons.Select(polygon => RegionGeometry.Polygon(polygon.Points.Select(point =>
+                ImageCoordinates.ToPixels(point, specimen.CoordinateSpace, image.DpiX, image.DpiY))));
+        var calibration = specimen.Calibration;
+        var (unitMetres, unitLabel) = calibration?.InputUnit switch
+        {
+            "m" => (1d, T("м", "m")),
+            "cm" => (.01, T("см", "cm")),
+            "mm" => (.001, T("мм", "mm")),
+            "nm" => (1e-9, T("нм", "nm")),
+            _ => (1e-6, T("мкм", "µm"))
+        };
+        var scaleX = calibration?.PixelSizeXMetres / unitMetres ?? 1;
+        var scaleY = calibration?.PixelSizeYMetres / unitMetres ?? 1;
+        var lengthUnit = calibration is null ? "px" : unitLabel;
+        var areaUnit = lengthUnit + "²";
+        var culture = CultureInfo.GetCultureInfo(Locale == "en" ? "en-US" : "ru-RU");
+        string Number(double value) => "≈ " + value.ToString("G4", culture);
+        var rows = geometries.Select((geometry, index) =>
+        {
+            var label = T($"Область {index + 1}", $"Region {index + 1}");
+            try
+            {
+                var measurement = RegionMeasurements.Measure(geometry, scaleX, scaleY);
+                return label + Environment.NewLine
+                    + T("Площадь: ", "Area: ") + Number(measurement.Area) + " " + areaUnit + Environment.NewLine
+                    + T("Периметр: ", "Perimeter: ") + Number(measurement.Perimeter) + " " + lengthUnit;
+            }
+            catch (ArgumentException)
+            {
+                // Imported geometry remains viewable even outside the numeric range
+                // supported by measurement; never rewrite its original vertices.
+                return label + Environment.NewLine + T("Измерение недоступно: превышен числовой диапазон.",
+                    "Measurement unavailable: numerical range exceeded.");
+            }
+        }).ToArray();
+        if (rows.Length == 0) return;
+        var note = calibration is null
+            ? T("Без калибровки: размеры в пикселях.", "Uncalibrated: dimensions are in pixels.")
+            : T("По калибровке текущего изображения.", "Using this image's calibration.");
+        note += Environment.NewLine + T("Периметр включает границы отверстий; области измеряются отдельно.",
+            "Perimeter includes hole boundaries; regions are measured separately.");
+        MeasurementsText.Text = string.Join(Environment.NewLine + Environment.NewLine, rows)
+            + Environment.NewLine + Environment.NewLine + note;
+        MeasurementsPanel.Visibility = Visibility.Visible;
     }
     private void ClearPolygons()
     {
