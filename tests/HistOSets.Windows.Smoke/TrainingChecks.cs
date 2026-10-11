@@ -153,8 +153,9 @@ internal static partial class Program
                     "Image-choice preparation offers four distinct answer classes and never uses an analog as a false distractor");
                 setup.SelectMaterials([materialId]); setup.SelectMethods(Enum.GetValues<TrainingMethod>());
                 CompleteTrainingTask(setup, setup.BuildPlanAsync());
-                Check(setup.Plan?.Eligibility.Count == 6 && setup.Plan.Questions.Any(q => q.Method == TrainingMethod.TraceElement),
-                    "All six methods receive eligibility results and tracing is prepared from saved regions without starting an exercise");
+                Check(setup.Plan?.Eligibility.Count == 6 && setup.Plan.Questions.Any(q => q.Method == TrainingMethod.TraceElement)
+                    && ((Button)setup.FindName("StartSessionButton")).IsEnabled,
+                    "All six methods receive eligibility results and a plan containing saved tracing regions is ready to execute");
                 ((TabControl)setup.FindName("TrainingTabs")).SelectedItem = setup.FindName("SetupTab");
                 SaveScreenshot(setup, Path.Combine(output, "native-training-setup-en.png"));
                 var setupScroll = VisualChildren<ScrollViewer>(setup).Single(view => ReferenceEquals(view.Content, setup.FindName("SetupPanel")));

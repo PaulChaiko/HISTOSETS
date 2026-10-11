@@ -37,10 +37,10 @@ internal static partial class Program
                 "Starting after a source edit invalidates the old plan and requires a fresh explicit preparation");
 
             var unchanged = SessionCatalogBytes(root);
-            setup.SelectMethods(Enum.GetValues<TrainingMethod>()); setup.SetOrder(TrainingOrder.ByMethod);
+            setup.SelectMethods(Enum.GetValues<TrainingMethod>().Where(method => method != TrainingMethod.TraceElement)); setup.SetOrder(TrainingOrder.ByMethod);
             CompleteTrainingTask(setup, setup.BuildPlanAsync());
-            Check(setup.Plan?.QuestionCount == 6 && ((Button)setup.FindName("StartSessionButton")).IsEnabled,
-                "A six-method plan enables recognition execution while preserving the deferred tracing question");
+            Check(setup.Plan?.QuestionCount == 5 && ((Button)setup.FindName("StartSessionButton")).IsEnabled,
+                "A plan restricted to the five recognition methods enables their native execution");
             RunSessionFromSetup(setup, session => CheckRussianSession(session, output));
             Check(SessionCatalogBytes(root) == unchanged,
                 "A complete native five-method session leaves every catalog file and its contents unchanged");
@@ -162,8 +162,8 @@ internal static partial class Program
     private static void CheckRussianSession(TrainingSessionWindow session, string output)
     {
         var state = session.Session;
-        Check(state.Questions.Count == 5 && state.DeferredQuestionCount == 1 && state.CurrentQuestion?.Method == TrainingMethod.NameObjectImage,
-            "Native execution includes the five recognition methods and leaves tracing explicitly deferred");
+        Check(state.Questions.Count == 5 && state.DeferredQuestionCount == 0 && state.CurrentQuestion?.Method == TrainingMethod.NameObjectImage,
+            "Native execution includes every question in a plan restricted to the five recognition methods");
         var first = state.CurrentQuestion!;
         var image = (TrainingImageView)session.FindName("MainImageView");
         Check(image.IsVisible && image.Surface.ImageSource is not null && image.Surface.Regions.Count == 0
