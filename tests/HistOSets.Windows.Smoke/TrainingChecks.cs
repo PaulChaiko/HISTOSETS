@@ -25,7 +25,7 @@ internal static partial class Program
             {
                 var image = Path.Combine(temp, "training-source-" + i + ".png");
                 CreateUniformImage(image, 320 + i * 20, 240);
-                var draft = new MaterialDraft();
+                var draft = new MaterialDraft { Id = Guid.Parse($"71110000-0000-4000-8000-{i + 1:000000000000}") };
                 draft.Texts["ru"] = new() { Name = "Препарат " + (i + 1), Summary = "Обычное краткое описание", Description = "Описание для просмотра, содержащее название препарата." };
                 draft.Texts["en"] = new() { Name = "Specimen " + (i + 1), Summary = "Ordinary summary", Description = "The atlas description that can contain the specimen name." };
                 var picture = new MaterialImageDraft { SourcePath = image, SourceSha256 = HashExchangeFile(image).ToLowerInvariant(), IsPrimary = true };
@@ -129,6 +129,9 @@ internal static partial class Program
                 setup.SetTagFilters([]); ((TextBox)setup.FindName("SearchBox")).Text = "Specimen 1"; Pump();
                 Check(((ItemsControl)setup.FindName("MaterialList")).Items.Count == 1,
                     "Training chooser searches across translations while displaying the current language");
+                ((TextBox)setup.FindName("SearchBox")).Text = allIds[2].ToString("D"); Pump();
+                Check(((ItemsControl)setup.FindName("MaterialList")).Items.Count == 1,
+                    "An exact material UUID remains searchable independently of its localized names");
                 ((TextBox)setup.FindName("SearchBox")).Text = "";
                 setup.SelectMaterials([materialId]); setup.SelectMethods([TrainingMethod.NameObjectDescription]);
                 CompleteTrainingTask(setup, setup.BuildPlanAsync());

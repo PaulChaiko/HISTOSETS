@@ -366,12 +366,16 @@ public partial class TrainingSetupWindow : Window
     {
         if (!initialized || updating) return;
         var tokens = CatalogBrowser.Normalize(SearchBox.Text).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var searchingId = Guid.TryParse(SearchBox.Text.Trim(), out var requestedId);
         var tagSets = taxonomy.Tags.Where(tag => selectedTags.Contains(tag.Id)).GroupBy(tag => tag.GroupId).Select(group => group.Select(tag => tag.Id).ToArray()).ToArray();
         var filtered = materials.Where(row =>
         {
             var analog = Catalog?.AnalogGroups.FirstOrDefault(group => group.Id == row.Material.AnalogGroupId);
-            var searchText = CatalogBrowser.Normalize(row.Material.Id + " " + string.Join(" ", row.Material.Names.Values.Concat(analog?.Names.Values ?? [])));
-            return tokens.All(token => searchText.Contains(token, StringComparison.Ordinal)) && tagSets.All(set => set.Any(row.Material.TagIds.Contains));
+            var searchText = CatalogBrowser.Normalize(string.Join(" ", row.Material.Names.Values.Concat(analog?.Names.Values ?? [])));
+            // An arbitrary digit in a UUID must not complete a name query such as "Specimen 1".
+            var matchesSearch = searchingId ? row.Material.Id == requestedId
+                : tokens.All(token => searchText.Contains(token, StringComparison.Ordinal));
+            return matchesSearch && tagSets.All(set => set.Any(row.Material.TagIds.Contains));
         }).OrderBy(row => row.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
         MaterialList.ItemsSource = filtered;
         EmptyMaterials.Text = materials.Count == 0 ? T("В базе пока нет объектов.", "There are no objects in this catalog yet.")
