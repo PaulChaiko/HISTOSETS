@@ -45,7 +45,7 @@ public partial class TagsWindow : Window
         TagsLabel.Text = T("Значения тегов", "Tag values");
         TagSearch.ToolTip = T("Поиск существующего значения на RU или EN", "Search existing values in RU or EN");
         System.Windows.Automation.AutomationProperties.SetName(TagSearch, T("Поиск тегов", "Search tags"));
-        EditGroupButton.Content = T("Изменить старую группу…", "Edit legacy group…");
+        EditGroupButton.Content = T("Изменить группу…", "Edit group…");
         DeleteGroupButton.Content = T("Удалить", "Delete");
         EditGroupButton.ToolTip = DeleteGroupButton.ToolTip = T("Доступно только для старых пользовательских групп", "Available only for legacy custom groups");
         NewTagButton.Content = T("Создать тег…", "Create tag…");

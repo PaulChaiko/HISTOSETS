@@ -86,7 +86,8 @@ public partial class MainWindow : Window
         WarningsButton.Content = T("Замечания", "Data issues");
         SearchLabel.Text = T("Поиск по названиям объектов и аналогов", "Search object and analog group names");
         SearchBox.ToolTip = T("Поиск на всех языках. Несколько слов; регистр и е/ё не различаются.", "Search all languages. Multiple words; case and е/ё are ignored.");
-        LanguageLabel.Text = T("Язык интерфейса и данных", "Interface and content language");
+        LanguageLabel.Text = T("Язык", "Language");
+        LanguageLabel.ToolTip = T("Язык интерфейса и данных", "Interface and content language");
         LanguageSelector.SelectedIndex = Locale == "en" ? 1 : 0;
         SortLabel.Text = T("Порядок", "Order");
         OriginalOrderItem.Content = T("Исходный порядок", "Original order");
