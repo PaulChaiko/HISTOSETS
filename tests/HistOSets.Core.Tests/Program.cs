@@ -143,4 +143,5 @@ if (args.Length > 0)
 }
 AdvancedGeometryChecks.Run(Check);
 TrainingPlannerChecks.Run(Check);
+TrainingSessionChecks.Run(Check);
 Console.WriteLine($"{count} checks passed.");

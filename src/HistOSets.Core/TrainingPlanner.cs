@@ -47,6 +47,12 @@ public static class TrainingPlanner
             .OrderByDescending(i => i.IsPrimary).ThenBy(i => i.SortOrder).ThenBy(i => i.MaterialImageId).FirstOrDefault());
         var imagePool = materials.Values.Where(m => objects.ContainsKey(m.Id) && primaryImages[m.Id] is not null)
             .Select(m => Choice(m.Id, primaryImages[m.Id]!, objects[m.Id])).ToArray();
+        // Every usable view of the target answer class is potentially correct, including
+        // secondary images and images of other analog members outside the selected cards.
+        var imageHashesByAnswer = materials.Values.GroupBy(m => m.AnalogGroupId is { } groupId
+                ? "analog:" + groupId.ToString("D") : "material:" + m.Id.ToString("D"), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.SelectMany(m => m.Images.Where(Usable))
+                .Select(i => i.Sha256.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
         var ambiguousImageHashes = materials.Values.Where(m => objects.ContainsKey(m.Id))
             .SelectMany(m => m.Images.Where(Usable).Select(i => (Hash: i.Sha256.ToLowerInvariant(), Answer: objects[m.Id].Key)))
             .GroupBy(i => i.Hash, StringComparer.Ordinal).Where(g => g.Select(i => i.Answer).Distinct().Skip(1).Any())
@@ -74,7 +80,7 @@ public static class TrainingPlanner
                 }
                 else
                 {
-                    var choices = ImageChoices(Choice(id, image, answer), imagePool, configuration.Seed);
+                    var choices = ImageChoices(Choice(id, image, answer), imagePool, imageHashesByAnswer[answer.Key], configuration.Seed);
                     if (choices.Count != 4) issues.Add(new(TrainingIssueCode.InsufficientImageChoices, choices.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                     else questions.Add(new(Key(method, id, image.MaterialImageId), method, id, answer,
                         materialImageId: image.MaterialImageId, imageChoices: choices));
@@ -199,9 +205,9 @@ public static class TrainingPlanner
     }
 
     private static IReadOnlyList<TrainingImageChoice> ImageChoices(TrainingImageChoice target,
-        IReadOnlyList<TrainingImageChoice> pool, int seed)
+        IReadOnlyList<TrainingImageChoice> pool, IReadOnlySet<string> targetImageHashes, int seed)
     {
-        var groups = pool.Where(c => c.Answer.Key != target.Answer.Key && c.Sha256 != target.Sha256)
+        var groups = pool.Where(c => c.Answer.Key != target.Answer.Key && !targetImageHashes.Contains(c.Sha256))
             .GroupBy(c => c.Answer.Key).OrderBy(g => g.Key, StringComparer.Ordinal)
             .Select(g => g.OrderBy(c => c.MaterialId).ThenBy(c => c.MaterialImageId).ToArray()).ToList();
         var random = new StableRandom(seed ^ StableHash(target.Answer.Key));
