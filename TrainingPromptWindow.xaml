@@ -1,0 +1,69 @@
+<Window x:Class="HistOSets.TrainingPromptWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="HISTOSETS" Width="860" Height="740" MinWidth="680" MinHeight="570"
+        WindowStartupLocation="CenterOwner" Background="#F4F1F8"
+        Closing="Window_Closing" PreviewKeyDown="Window_KeyDown">
+    <DockPanel Margin="18">
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock x:Name="OwnerHeading" FontSize="19" FontWeight="SemiBold" TextWrapping="Wrap"/>
+            <TextBlock x:Name="TrainingHelp" TextWrapping="Wrap" Margin="0,8,0,12" Foreground="#555555"/>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <TextBlock x:Name="PromptStatus" TextWrapping="Wrap" Margin="0,0,0,10"/>
+            <WrapPanel HorizontalAlignment="Right">
+                <Button x:Name="LanguageButton" Content="РУССКИЙ | ENGLISH" Click="Language_Click"/>
+                <Button x:Name="ApplyPromptsButton" Click="Apply_Click"/>
+                <Button x:Name="CancelPromptsButton" Click="Cancel_Click" Margin="0"/>
+            </WrapPanel>
+        </StackPanel>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <DockPanel Grid.Column="0">
+                <TextBlock x:Name="VariantsHeading" DockPanel.Dock="Top" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                    <WrapPanel Margin="0,0,0,8">
+                        <Button x:Name="AddPromptButton" Click="Add_Click"/>
+                        <Button x:Name="RemovePromptButton" Click="Remove_Click" Margin="0"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,0,0,8">
+                        <Button x:Name="MovePromptUpButton" Click="MoveUp_Click"/>
+                        <Button x:Name="MovePromptDownButton" Click="MoveDown_Click" Margin="0"/>
+                    </WrapPanel>
+                    <WrapPanel>
+                        <Button x:Name="UndoPromptButton" Click="Undo_Click"/>
+                        <Button x:Name="RedoPromptButton" Click="Redo_Click" Margin="0"/>
+                    </WrapPanel>
+                </StackPanel>
+                <ListBox x:Name="TrainingPromptList" SelectionChanged="Prompt_Changed" Background="#EDE5FB"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="8"/></Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" TextWrapping="Wrap"/></DataTemplate></ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock x:Name="EmptyPromptHint" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <StackPanel x:Name="PromptFields">
+                        <CheckBox x:Name="PromptEnabled" Checked="Enabled_Changed" Unchecked="Enabled_Changed" Margin="0,0,0,12">
+                            <TextBlock x:Name="EnabledLabel" TextWrapping="Wrap"/>
+                        </CheckBox>
+                        <GroupBox Header="RU" Background="White" Margin="0,0,0,12"><StackPanel Margin="8">
+                            <TextBlock x:Name="PromptRuLabel" Margin="0,0,0,5"/>
+                            <TextBox x:Name="PromptRuText" MinHeight="125" MaxHeight="200" TextWrapping="Wrap" AcceptsReturn="True"
+                                     TextChanged="Prompt_TextChanged" LostKeyboardFocus="Prompt_LostFocus"/>
+                        </StackPanel></GroupBox>
+                        <GroupBox Header="EN" Background="White"><StackPanel Margin="8">
+                            <TextBlock x:Name="PromptEnLabel" Margin="0,0,0,5"/>
+                            <TextBox x:Name="PromptEnText" MinHeight="125" MaxHeight="200" TextWrapping="Wrap" AcceptsReturn="True"
+                                     TextChanged="Prompt_TextChanged" LostKeyboardFocus="Prompt_LostFocus"/>
+                        </StackPanel></GroupBox>
+                        <TextBlock x:Name="OtherLocalesNotice" TextWrapping="Wrap" Foreground="#555555" Margin="0,10,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>

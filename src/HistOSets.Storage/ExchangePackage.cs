@@ -18,6 +18,7 @@ public sealed class ExchangePackage : IDisposable
     private bool disposed;
     private readonly string stage;
     private readonly IReadOnlyList<ExchangeFile> files;
+    public int FormatVersion { get; }
     public Guid PackageId { get; }
     public Guid SourceCatalogId { get; }
     public string SourceCatalogName { get; }
@@ -31,6 +32,7 @@ public sealed class ExchangePackage : IDisposable
     private ExchangePackage(ExchangeManifest manifest, string staging,
         IReadOnlyDictionary<string, IReadOnlyList<ExchangeRow>> tables)
     {
+        FormatVersion = manifest.FormatVersion;
         PackageId = Guid.Parse(manifest.PackageId); SourceCatalogId = Guid.Parse(manifest.SourceCatalogId);
         SourceCatalogName = manifest.SourceCatalogName; SourceContentRevision = manifest.SourceContentRevision;
         CreatedUtc = manifest.CreatedUtc; ContentSha256 = manifest.Files.Single(f => f.Path == "graph.json").Sha256;
@@ -68,7 +70,7 @@ public sealed class ExchangePackage : IDisposable
             }
             IReadOnlyDictionary<string, IReadOnlyList<ExchangeRow>> tables;
             using (var stream = File.OpenRead(Path.Combine(stage, "graph.json")))
-            using (var document = ReadJson(stream, stream.Length)) tables = ReadTables(document.RootElement);
+            using (var document = ReadJson(stream, stream.Length)) tables = ReadTables(document.RootElement, manifest.FormatVersion);
             tables = ValidateGraph(tables, manifest, stage);
             return new(manifest, stage, tables);
         }
@@ -134,7 +136,7 @@ public sealed class ExchangePackage : IDisposable
         var name = value.GetProperty("SourceCatalogName").GetString()!;
         var revision = value.GetProperty("SourceContentRevision").GetInt64();
         var created = value.GetProperty("CreatedUtc").GetString()!;
-        if (version != 1 || !IsUuid(package) || !IsUuid(source) || name is null || name.Length > 200 || revision < 0 || !IsTime(created))
+        if (version is not (1 or 2) || !IsUuid(package) || !IsUuid(source) || name is null || name.Length > 200 || revision < 0 || !IsTime(created))
             throw Invalid("Неподдерживаемая версия или неверные сведения о каталоге.");
         var fileList = value.GetProperty("Files");
         if (fileList.ValueKind != JsonValueKind.Array || fileList.GetArrayLength() is < 1 or > MaxFiles + 1)
@@ -166,13 +168,19 @@ public sealed class ExchangePackage : IDisposable
             throw Invalid("Неизвестные, отсутствующие или повторяющиеся поля JSON.");
     }
 
-    private static IReadOnlyDictionary<string, IReadOnlyList<ExchangeRow>> ReadTables(JsonElement graph)
+    private static IReadOnlyDictionary<string, IReadOnlyList<ExchangeRow>> ReadTables(JsonElement graph, int formatVersion)
     {
-        RequireProperties(graph, ExchangeSchema.TableNames.ToArray());
+        var transmittedTables = formatVersion == 1 ? ExchangeSchema.LegacyTableNames : ExchangeSchema.TableNames;
+        RequireProperties(graph, transmittedTables.ToArray());
         var tables = new Dictionary<string, IReadOnlyList<ExchangeRow>>(StringComparer.Ordinal);
         var count = 0;
         foreach (var name in ExchangeSchema.TableNames)
         {
+            if (!transmittedTables.Contains(name))
+            {
+                tables.Add(name, Array.Empty<ExchangeRow>());
+                continue;
+            }
             var array = graph.GetProperty(name);
             if (array.ValueKind != JsonValueKind.Array || array.GetArrayLength() > MaxRows - count) throw Invalid("Превышен предел числа записей.");
             count += array.GetArrayLength();
@@ -301,6 +309,8 @@ public sealed class ExchangePackage : IDisposable
             "SELECT COUNT(*) FROM material_images mi JOIN images i ON i.id=mi.image_id WHERE mi.deleted_utc IS NULL AND i.deleted_utc IS NOT NULL",
             "SELECT COUNT(*) FROM image_calibrations c JOIN material_images mi ON mi.id=c.material_image_id WHERE c.deleted_utc IS NULL AND mi.deleted_utc IS NOT NULL",
             "SELECT COUNT(*) FROM element_translations t JOIN elements e ON e.id=t.element_id WHERE t.deleted_utc IS NULL AND e.deleted_utc IS NOT NULL",
+            "SELECT COUNT(*) FROM training_prompts p JOIN elements e ON e.id=p.element_id WHERE p.deleted_utc IS NULL AND e.deleted_utc IS NOT NULL",
+            "SELECT COUNT(*) FROM training_prompt_translations t JOIN training_prompts p ON p.id=t.prompt_id WHERE t.deleted_utc IS NULL AND p.deleted_utc IS NOT NULL",
             "SELECT COUNT(*) FROM material_tags mt JOIN tags t ON t.id=mt.tag_id WHERE mt.deleted_utc IS NULL AND t.deleted_utc IS NOT NULL",
             "SELECT COUNT(*) FROM tags t JOIN tag_groups g ON g.id=t.group_id WHERE t.deleted_utc IS NULL AND g.deleted_utc IS NOT NULL",
             "SELECT COUNT(*) FROM tag_translations t JOIN tags p ON p.id=t.tag_id WHERE t.deleted_utc IS NULL AND p.deleted_utc IS NOT NULL",
@@ -308,7 +318,7 @@ public sealed class ExchangePackage : IDisposable
             "SELECT COUNT(*) FROM analog_group_translations t JOIN analog_groups p ON p.id=t.group_id WHERE t.deleted_utc IS NULL AND p.deleted_utc IS NOT NULL",
             "SELECT COUNT(*) FROM materials m JOIN analog_groups g ON g.id=m.analog_group_id WHERE m.deleted_utc IS NULL AND g.deleted_utc IS NOT NULL"
         }) if (Convert.ToInt64(Scalar(connection, row, transaction)) != 0) throw Invalid("Действующая запись ссылается на удалённого владельца.");
-        foreach (var table in new[] { "material_translations", "material_images", "elements", "regions", "material_tags" })
+        foreach (var table in new[] { "material_translations", "material_images", "elements", "regions", "material_tags", "training_prompts" })
             if (Convert.ToInt64(Scalar(connection, $"SELECT COUNT(*) FROM {table} c JOIN materials m ON m.id=c.material_id WHERE c.deleted_utc IS NULL AND m.deleted_utc IS NOT NULL;", transaction)) != 0)
                 throw Invalid("Действующая запись ссылается на удалённого владельца.");
         (string Code, string Ru, string En)[] systemTypes = [

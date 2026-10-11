@@ -142,4 +142,5 @@ if (args.Length > 0)
     Check(baseline.Warnings.Count == 0, "Baseline XML and file references valid");
 }
 AdvancedGeometryChecks.Run(Check);
+TrainingPlannerChecks.Run(Check);
 Console.WriteLine($"{count} checks passed.");

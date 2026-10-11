@@ -56,7 +56,7 @@ internal static class EditorChecks
             Check(saved.Elements[0].Regions.Select(r=>RegionGeometryCodec.Serialize(r.Geometry)).SequenceEqual(element.Regions.Select(r=>RegionGeometryCodec.Serialize(r.Geometry))),
                 "Polygon, rectangle and ellipse parameters round-trip exactly through canonical JSON");
             Check(Convert.ToInt64(Sql(store.DatabasePath,"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='region_points';"))==0,
-                "Schema5 has one authoritative geometry representation and no region_points table");
+                "Schema6 has one authoritative geometry representation and no region_points table");
             var noOpHash=Hash(store.DatabasePath); var revision=store.GetMetadata().ContentRevision;
             var same=store.SaveMaterialDraft(saved.Clone(),_=>throw new Exception("Existing image must not be decoded again"));
             Check(same.Revision==saved.Revision && store.GetMetadata().ContentRevision==revision && Hash(store.DatabasePath)==noOpHash,
@@ -115,7 +115,7 @@ internal static class EditorChecks
         {
             var draft=store.LoadMaterialDraft(materialId);
             Check(draft.Elements[0].Regions.Count==3 && draft.Elements[0].Regions[2].Geometry.Kind=="ellipse" && draft.Texts["und"].Name=="Legacy",
-                "Schema5 backup restores editable typed geometry and all language records");
+                "Schema6 backup restores editable typed geometry and all language records");
         }
 
         var oldTwo=FoundationChecks.MakeSchema1(source,backup,Path.Combine(temp,"ActualSchema2"));
@@ -137,10 +137,10 @@ internal static class EditorChecks
         var oldPoint=Convert.ToDouble(Sql(db,"SELECT x FROM region_points WHERE x>1968 LIMIT 1;"));
         using(var store=new CatalogStore(oldTwo))
         {
-            Check(store.GetMetadata().FormatVersion==5 && store.GetMetadata().Name=="Actual old catalog" && store.GetMetadata().ContentRevision==17,
-                "Real schema2 upgrades to schema5 without changing catalog name or content revision");
+            Check(store.GetMetadata().FormatVersion==6 && store.GetMetadata().Name=="Actual old catalog" && store.GetMetadata().ContentRevision==17,
+                "Real schema2 upgrades to schema6 without changing catalog name or content revision");
             Check(store.Load().Specimens.SelectMany(s=>s.Elements).SelectMany(e=>e.Polygons).SelectMany(p=>p.Points).Any(p=>p.X==oldPoint),
-                "Schema2-to-5 migration retains an original out-of-image vertex exactly");
+                "Schema2-to-6 migration retains an original out-of-image vertex exactly");
             var oldBackup=store.LastMigrationBackupPath!;
             var originalTwo=Path.Combine(temp,"RestoreActualSchema2"); CatalogStore.RestoreBackup(oldBackup,originalTwo);
             Check(Convert.ToInt64(Sql(Path.Combine(originalTwo,"catalog.sqlite"),"PRAGMA user_version;"))==2 &&

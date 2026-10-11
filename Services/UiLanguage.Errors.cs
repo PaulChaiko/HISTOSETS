@@ -65,6 +65,15 @@ internal static partial class UiLanguage
 
     private static readonly (string Russian, string English)[] ErrorMessages =
     [
+        ("Учебное описание ссылается на удалённый объект или элемент.", "A training description refers to a deleted object or element."),
+        ("Некорректная языковая запись учебного описания.", "A training description translation is invalid."),
+        ("Учебное описание принадлежит другому объекту или элементу.", "The training description belongs to another object or element."),
+        ("Изображение удалено из каталога: ", "The image has been deleted from the catalog: "),
+        ("Не найдено изображение: ", "The image could not be found: "),
+        ("Изображение изменено вне HISTOSETS: ", "The image has been modified outside HISTOSETS: "),
+        ("Размеры или формат изображения не соответствуют каталогу: ", "The image dimensions or format do not match the catalog: "),
+        ("Изображение изменилось во время проверки: ", "The image changed during verification: "),
+        ("Не удалось прочитать изображение «", "The image could not be read: «"),
         ("Выберите от 1 до 100 000 объектов для экспорта.", "Select between 1 and 100,000 objects to export."),
         ("Файл уже существует. Выберите новое имя пакета обмена.", "The file already exists. Choose a new exchange package name."),
         ("Выбранный объект больше не существует. Обновите список экспорта.", "A selected object no longer exists. Refresh the export list."),

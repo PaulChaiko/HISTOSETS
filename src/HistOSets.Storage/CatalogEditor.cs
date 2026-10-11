@@ -65,6 +65,7 @@ public sealed partial class CatalogStore
                 AuthorCredit = reader.GetString(3), RightsCredit = reader.GetString(4), AnalogGroupId = reader.IsDBNull(5) ? null : Guid.Parse(reader.GetString(5)) };
         }
         result.Texts = ReadEditorTexts(connection, "material_translations", "material_id", key, transaction);
+        result.TrainingPrompts = ReadEditorPrompts(connection, materialId, null, transaction);
         using (var command = Command(connection, """
             SELECT mi.id,i.id,i.storage_key,i.pixel_width,i.pixel_height,i.dpi_x,i.dpi_y,i.mime_type,i.orientation,mi.is_primary
             FROM material_images mi JOIN images i ON i.id=mi.image_id AND i.deleted_utc IS NULL
@@ -81,7 +82,9 @@ public sealed partial class CatalogStore
         using (var reader = command.ExecuteReader())
             while (reader.Read())
             {
-                var element = new MaterialElementDraft { Id = Guid.Parse(reader.GetString(0)), Texts = ReadEditorTexts(connection,"element_translations","element_id",reader.GetString(0),transaction) };
+                var elementId = Guid.Parse(reader.GetString(0));
+                var element = new MaterialElementDraft { Id = elementId, Texts = ReadEditorTexts(connection,"element_translations","element_id",reader.GetString(0),transaction),
+                    TrainingPrompts = ReadEditorPrompts(connection, materialId, elementId, transaction) };
                 using var regions = Command(connection, "SELECT id,material_image_id,geometry_json FROM regions WHERE element_id=$id AND deleted_utc IS NULL ORDER BY sort_order,id;", transaction, ("$id",element.Id.ToString()));
                 using var regionReader = regions.ExecuteReader();
                 while (regionReader.Read()) element.Regions.Add(new() { Id = Guid.Parse(regionReader.GetString(0)), MaterialImageId = Guid.Parse(regionReader.GetString(1)), Geometry = RegionGeometryCodec.Deserialize(regionReader.GetString(2)) });
@@ -191,6 +194,7 @@ public sealed partial class CatalogStore
                     SaveEditorRow(connection,transaction,"materials",draft.Id,now,origin,
                         [("kind",draft.Kind),("status",draft.Status),("author_credit",draft.AuthorCredit),("rights_credit",draft.RightsCredit),("analog_group_id",draft.AnalogGroupId?.ToString())],touch:false);
                     SaveEditorTexts(connection,transaction,"material_translations","material_id",draft.Id,draft.Texts,now,origin);
+                    SaveEditorPrompts(connection,transaction,draft.Id,null,draft.TrainingPrompts,now,origin);
                     var primary = draft.Images.SingleOrDefault(i=>i.IsPrimary)?.Id.ToString();
                     var previousPrimary = Scalar(connection,"SELECT id FROM material_images WHERE material_id=$id AND is_primary=1 AND deleted_utc IS NULL;",transaction,("$id",draft.Id.ToString())) as string;
                     if (previousPrimary is not null && previousPrimary!=primary)
@@ -215,6 +219,7 @@ public sealed partial class CatalogStore
                         RequireOwner(connection,transaction,"elements",element.Id,"material_id",draft.Id);
                         SaveEditorRow(connection,transaction,"elements",element.Id,now,origin,[("material_id",draft.Id.ToString()),("sort_order",e)]);
                         SaveEditorTexts(connection,transaction,"element_translations","element_id",element.Id,element.Texts,now,origin);
+                        SaveEditorPrompts(connection,transaction,draft.Id,element.Id,element.TrainingPrompts,now,origin);
                         for(var r=0;r<element.Regions.Count;r++)
                         {
                             var region=element.Regions[r];
@@ -226,9 +231,13 @@ public sealed partial class CatalogStore
                     }
                     RemoveMissingRows(connection,transaction,"regions","material_id",draft.Id,draft.Elements.SelectMany(e=>e.Regions).Select(r=>r.Id).ToHashSet(),now);
                     RemoveMissingRows(connection,transaction,"elements","material_id",draft.Id,draft.Elements.Select(e=>e.Id).ToHashSet(),now);
+                    RemoveMissingRows(connection,transaction,"training_prompts","material_id",draft.Id,
+                        draft.TrainingPrompts.Concat(draft.Elements.SelectMany(e=>e.TrainingPrompts)).Select(p=>p.Id).ToHashSet(),now);
                     Execute(connection,"""
                         UPDATE element_translations SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE deleted_utc IS NULL AND element_id IN
                         (SELECT id FROM elements WHERE material_id=$id AND deleted_utc IS NOT NULL);
+                        UPDATE training_prompt_translations SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE deleted_utc IS NULL AND prompt_id IN
+                        (SELECT id FROM training_prompts WHERE material_id=$id AND deleted_utc IS NOT NULL);
                         """,transaction,("$now",now),("$id",draft.Id.ToString()));
                     RemoveMissingRows(connection,transaction,"material_images","material_id",draft.Id,draft.Images.Select(i=>i.Id).ToHashSet(),now);
                     Execute(connection,"""
@@ -277,6 +286,12 @@ public sealed partial class CatalogStore
             if(list.Any(id=>id==Guid.Empty) || list.Distinct().Count()!=list.Count) throw new CatalogStorageException("Идентификаторы записей редактора должны быть непустыми и уникальными.");
         }
         Unique(draft.Images.Select(i=>i.Id)); Unique(draft.Elements.Select(e=>e.Id)); Unique(draft.Elements.SelectMany(e=>e.Regions).Select(r=>r.Id));
+        var prompts = draft.TrainingPrompts.Concat(draft.Elements.SelectMany(e=>e.TrainingPrompts)).ToList();
+        Unique(prompts.Select(p=>p.Id));
+        foreach(var prompt in prompts)
+            foreach(var (locale,text) in prompt.Texts)
+                if(string.IsNullOrWhiteSpace(locale) || text is null)
+                    throw new CatalogStorageException("Некорректная языковая запись учебного описания.");
         if(draft.Images.Count(i=>i.IsPrimary)>1) throw new CatalogStorageException("У объекта может быть только одно основное изображение.");
         foreach(var image in draft.Images)
             if(image.Calibration is { } calibration)
@@ -371,6 +386,53 @@ public sealed partial class CatalogStore
             Execute(connection,$"UPDATE {table} SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE id=$id;",transaction,("$id",missing.ToString()),("$now",now));
     }
 
+    private static List<TrainingPromptDraft> ReadEditorPrompts(SqliteConnection connection, Guid materialId,
+        Guid? elementId, SqliteTransaction? transaction = null)
+    {
+        var result = new List<TrainingPromptDraft>();
+        using var command = Command(connection,"""
+            SELECT id,is_enabled FROM training_prompts
+            WHERE material_id=$material AND element_id IS $element AND deleted_utc IS NULL ORDER BY sort_order,id;
+            """,transaction,("$material",materialId.ToString()),("$element",elementId?.ToString()));
+        using var reader = command.ExecuteReader();
+        while(reader.Read())
+        {
+            var prompt = new TrainingPromptDraft { Id = Guid.Parse(reader.GetString(0)), IsEnabled = reader.GetBoolean(1), Texts = new() };
+            using var textCommand = Command(connection,"SELECT locale,text FROM training_prompt_translations WHERE prompt_id=$id AND deleted_utc IS NULL;",
+                transaction,("$id",prompt.Id.ToString()));
+            using var textReader = textCommand.ExecuteReader();
+            while(textReader.Read()) prompt.Texts.Add(textReader.GetString(0),textReader.GetString(1));
+            result.Add(prompt);
+        }
+        return result;
+    }
+
+    private static void SaveEditorPrompts(SqliteConnection connection,SqliteTransaction transaction,Guid materialId,
+        Guid? elementId,IReadOnlyList<TrainingPromptDraft> prompts,string now,string origin)
+    {
+        for(var i=0;i<prompts.Count;i++)
+        {
+            var prompt = prompts[i];
+            using(var command = Command(connection,"SELECT material_id,element_id FROM training_prompts WHERE id=$id;",transaction,("$id",prompt.Id.ToString())))
+            using(var reader = command.ExecuteReader())
+                if(reader.Read() && (reader.GetString(0)!=materialId.ToString() || (reader.IsDBNull(1)?null:reader.GetString(1))!=elementId?.ToString()))
+                    throw new CatalogStorageException("Учебное описание принадлежит другому объекту или элементу.");
+            SaveEditorRow(connection,transaction,"training_prompts",prompt.Id,now,origin,
+                [("material_id",materialId.ToString()),("element_id",elementId?.ToString()),("sort_order",i),("is_enabled",prompt.IsEnabled?1:0)]);
+            var retained = new HashSet<Guid>();
+            foreach(var (locale,text) in prompt.Texts)
+            {
+                var old = Scalar(connection,"SELECT id FROM training_prompt_translations WHERE prompt_id=$id AND locale=$locale;",
+                    transaction,("$id",prompt.Id.ToString()),("$locale",locale)) as string;
+                var id = old is null?Guid.NewGuid():Guid.Parse(old);
+                retained.Add(id);
+                SaveEditorRow(connection,transaction,"training_prompt_translations",id,now,origin,
+                    [("prompt_id",prompt.Id.ToString()),("locale",locale),("text",text)]);
+            }
+            RemoveMissingRows(connection,transaction,"training_prompt_translations","prompt_id",prompt.Id,retained,now);
+        }
+    }
+
     private static void SaveEditorTags(SqliteConnection connection,SqliteTransaction transaction,MaterialDraft draft,string now,string origin)
     {
         var retained=new HashSet<Guid>();
@@ -392,8 +454,9 @@ public sealed partial class CatalogStore
             Execute(connection,"""
                 UPDATE element_translations SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE deleted_utc IS NULL AND element_id IN(SELECT id FROM elements WHERE material_id=$id);
                 UPDATE image_calibrations SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE deleted_utc IS NULL AND material_image_id IN(SELECT id FROM material_images WHERE material_id=$id);
+                UPDATE training_prompt_translations SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE deleted_utc IS NULL AND prompt_id IN(SELECT id FROM training_prompts WHERE material_id=$id);
                 """,transaction,("$id",materialId.ToString()),("$now",now));
-            foreach(var table in new[]{"material_translations","material_tags","regions","elements","material_images"})
+            foreach(var table in new[]{"material_translations","material_tags","regions","elements","material_images","training_prompts"})
                 Execute(connection,$"UPDATE {table} SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE material_id=$id AND deleted_utc IS NULL;",transaction,("$id",materialId.ToString()),("$now",now));
             Execute(connection,"UPDATE materials SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE id=$id;",transaction,("$id",materialId.ToString()),("$now",now));
             return true;
