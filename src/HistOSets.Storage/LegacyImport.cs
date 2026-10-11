@@ -130,14 +130,11 @@ public sealed partial class CatalogStore
                             for (var p = 0; p < element.Polygons.Count; p++)
                             {
                                 var regionId = Id("region/" + group.Key + "/" + e + "/" + p);
+                                var geometry = RegionGeometry.Polygon(element.Polygons[p].Points.Select(point =>
+                                    ImageCoordinates.ToPixels(point, specimen.CoordinateSpace, asset.Metadata.DpiX, asset.Metadata.DpiY)));
                                 Insert("regions", regionId, ("material_id", materialId), ("material_image_id", materialImage), ("element_id", elementId),
-                                    ("geometry_type", "polygon"), ("coordinate_space", "pixels"), ("sort_order", p));
-                                for (var vertex = 0; vertex < element.Polygons[p].Points.Count; vertex++)
-                                {
-                                    var point = ImageCoordinates.ToPixels(element.Polygons[p].Points[vertex], specimen.CoordinateSpace, asset.Metadata.DpiX, asset.Metadata.DpiY);
-                                    Execute(connection, "INSERT INTO region_points VALUES ($region, $ordinal, $x, $y);", transaction,
-                                        ("$region", regionId), ("$ordinal", vertex), ("$x", point.X), ("$y", point.Y));
-                                }
+                                    ("geometry_type", "polygon"), ("coordinate_space", "pixels"), ("sort_order", p),
+                                    ("geometry_json", RegionGeometryCodec.Serialize(geometry)));
                             }
                         }
                         foreach (var record in group)

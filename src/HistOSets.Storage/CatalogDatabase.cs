@@ -1,12 +1,13 @@
 using System.Reflection;
 using Microsoft.Data.Sqlite;
+using HistOSets.Core;
 
 namespace HistOSets.Storage;
 
 internal static class CatalogDatabase
 {
     internal const int ApplicationId = 0x48535453; // HSTS
-    internal const int Version = 2;
+    internal const int Version = 3;
 
     internal static SqliteConnection Open(string path, SqliteOpenMode mode = SqliteOpenMode.ReadOnly)
     {
@@ -34,6 +35,7 @@ internal static class CatalogDatabase
         Execute(connection, "INSERT INTO catalog_metadata VALUES (1, $id, 1, $now);", transaction,
             ("$id", Guid.NewGuid().ToString()), ("$now", StorageFiles.UtcNow()));
         ApplyVersion2(connection, transaction, name);
+        ApplyVersion3(connection, transaction);
         Validate(connection, transaction: transaction);
         transaction.Commit();
     }
@@ -80,7 +82,7 @@ internal static class CatalogDatabase
         var appId = Convert.ToInt64(Scalar(connection, "PRAGMA application_id;", transaction));
         if (appId != ApplicationId) throw new CatalogStorageException("Выбранный файл не является базой HISTOSETS.");
         var version = Convert.ToInt64(Scalar(connection, "PRAGMA user_version;", transaction));
-        if (version != Version && !(allowLegacy && version == 1))
+        if (version != Version && !(allowLegacy && version is 1 or 2))
             throw new CatalogStorageException($"Версия базы {version} не поддерживается этой сборкой (ожидается {Version}). Файл не изменён.");
         if (!Equals(Scalar(connection, "PRAGMA quick_check;", transaction), "ok"))
             throw new CatalogStorageException("Нарушена целостность SQLite. Восстановите резервную копию в другой каталог.");
@@ -99,18 +101,60 @@ internal static class CatalogDatabase
             UNION ALL SELECT id FROM material_images UNION ALL SELECT id FROM tag_groups
             UNION ALL SELECT id FROM tag_group_translations UNION ALL SELECT id FROM tags
             UNION ALL SELECT id FROM tag_translations UNION ALL SELECT id FROM material_tags
-            """ + (version == 2 ? " UNION ALL SELECT id FROM analog_groups UNION ALL SELECT id FROM analog_group_translations UNION ALL SELECT id FROM image_calibrations;" : ";"), transaction))
+            """ + (version >= 2 ? " UNION ALL SELECT id FROM analog_groups UNION ALL SELECT id FROM analog_group_translations UNION ALL SELECT id FROM image_calibrations;" : ";"), transaction))
         using (var reader = command.ExecuteReader())
             while (reader.Read())
                 if (!Guid.TryParseExact(reader.GetString(0), "D", out _))
                     throw new CatalogStorageException("В базе обнаружен неверный UUID записи.");
         // Reject incomplete geometry instead of silently displaying a different atlas.
-        if (Convert.ToInt64(Scalar(connection, """
+        if (version < 3 && Convert.ToInt64(Scalar(connection, """
             SELECT COUNT(*) FROM regions r WHERE
               (SELECT COUNT(*) FROM region_points p WHERE p.region_id = r.id) < 3
               OR (SELECT COUNT(*) FROM (SELECT DISTINCT x,y FROM region_points p WHERE p.region_id = r.id)) < 3;
             """, transaction)) != 0)
             throw new CatalogStorageException("В базе обнаружен неполный контур.");
+        if (version >= 3)
+        {
+            using var command = Command(connection, "SELECT geometry_type,geometry_json FROM regions;", transaction);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                try
+                {
+                    if (RegionGeometryCodec.Deserialize(reader.GetString(1)).Kind != reader.GetString(0))
+                        throw new FormatException("Geometry type mismatch.");
+                }
+                catch (FormatException ex) { throw new CatalogStorageException("Повреждено описание области.", ex); }
+            }
+        }
+    }
+
+    internal static void ApplyVersion3(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        Execute(connection, Resource("Migrations.003_editor_geometry.sql"), transaction);
+        var regions = new List<string>();
+        using (var command = Command(connection, "SELECT id FROM regions;", transaction))
+        using (var reader = command.ExecuteReader()) while (reader.Read()) regions.Add(reader.GetString(0));
+        foreach (var id in regions)
+        {
+            var points = new List<AtlasPoint>();
+            using (var command = Command(connection, "SELECT x,y FROM region_points WHERE region_id=$id ORDER BY ordinal;", transaction, ("$id", id)))
+            using (var reader = command.ExecuteReader()) while (reader.Read()) points.Add(new(reader.GetDouble(0),reader.GetDouble(1)));
+            var json = RegionGeometryCodec.Serialize(RegionGeometry.Polygon(points));
+            Execute(connection, """
+                INSERT INTO regions_v3(id,material_id,material_image_id,element_id,geometry_type,coordinate_space,geometry_json,sort_order,revision,created_utc,modified_utc,deleted_utc,origin_catalog_id,source_batch_id)
+                SELECT id,material_id,material_image_id,element_id,geometry_type,coordinate_space,$json,sort_order,revision,created_utc,modified_utc,deleted_utc,origin_catalog_id,source_batch_id FROM regions WHERE id=$id;
+                """, transaction, ("$json", json), ("$id", id));
+        }
+        Execute(connection, """
+            DROP TABLE region_points;
+            DROP TABLE regions;
+            ALTER TABLE regions_v3 RENAME TO regions;
+            CREATE INDEX ix_regions_element ON regions(element_id,sort_order);
+            CREATE INDEX ix_regions_image ON regions(material_image_id);
+            INSERT INTO schema_migrations VALUES(3,$now);
+            PRAGMA user_version=3;
+            """, transaction, ("$now", StorageFiles.UtcNow()));
     }
 
     internal static string Resource(string name)

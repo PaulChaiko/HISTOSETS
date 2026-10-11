@@ -388,8 +388,12 @@ public partial class MainWindow : Window
         SInfo.IsEnabled = !string.IsNullOrWhiteSpace(current.Description);
         MaterialTagsButton.IsEnabled = current.MaterialId is not null;
         LanguageStatus.Text = current.Locale == Locale ? "" : T($"Перевода на выбранный язык нет. Показан: {current.LocaleLabel}.", $"Translation unavailable. Showing: {current.LocaleLabel}.");
-        ListOfElements.ItemsSource = current.Elements;
-        ListOfElements.SelectedItem = element is null ? null : current.Elements.FirstOrDefault(e => e.Id == element);
+        // Labels belong to this UI projection; the catalog's original text is unchanged.
+        var displayedElements = current.Elements.Select((entry, index) => string.IsNullOrWhiteSpace(entry.Name)
+            ? entry with { Name = T($"Элемент {index + 1} без названия", $"Untitled element {index + 1}") }
+            : entry).ToArray();
+        ListOfElements.ItemsSource = displayedElements;
+        ListOfElements.SelectedItem = element is null ? null : displayedElements.FirstOrDefault(e => e.Id == element);
         try
         {
             if (current.ImageIssue is not null)
@@ -446,18 +450,41 @@ public partial class MainWindow : Window
         if (image is null || CurrentSpecimen is null) return;
         StatusText.Text = T($"{image.PixelWidth} × {image.PixelHeight} пикселей. Элементов: {CurrentSpecimen.Elements.Count}.", $"{image.PixelWidth} × {image.PixelHeight} pixels. Elements: {CurrentSpecimen.Elements.Count}.");
         if (element is null) return;
-        foreach (var polygon in element.Polygons)
+        if (element.Regions.Count > 0)
+        {
+            foreach (var region in element.Regions)
+            {
+                var geometry = region.Geometry;
+                Shape shape = geometry.Kind switch
+                {
+                    "rectangle" => new Rectangle { Width = geometry.Width, Height = geometry.Height },
+                    "ellipse" => new Ellipse { Width = geometry.Width, Height = geometry.Height },
+                    "polygon" => new Polygon { Points = new PointCollection(geometry.Points.Select(p => new Point(p.X, p.Y))) },
+                    _ => throw new InvalidOperationException("Unsupported region geometry kind.")
+                };
+                if (geometry.Kind != "polygon")
+                {
+                    Canvas.SetLeft(shape, geometry.X);
+                    Canvas.SetTop(shape, geometry.Y);
+                }
+                shape.Tag = region.Id;
+                shape.IsHitTestVisible = false;
+                Desk.Children.Add(shape);
+            }
+        }
+        else foreach (var polygon in element.Polygons)
         {
             var points = polygon.Points.Select(p => ImageCoordinates.ToPixels(p, CurrentSpecimen.CoordinateSpace, image.DpiX, image.DpiY));
             Desk.Children.Add(new Polygon { Points = new PointCollection(points.Select(p => new Point(p.X, p.Y))), IsHitTestVisible = false });
         }
         UpdateOutlineStyle();
-        StatusText.Text = element.Polygons.Count == 0 ? T("Для этого элемента разметка пока не добавлена.", "This element has no regions yet.") : T($"{element.Name} — областей: {element.Polygons.Count}.", $"{element.Name} — regions: {element.Polygons.Count}.");
+        var count = element.Regions.Count > 0 ? element.Regions.Count : element.Polygons.Count;
+        StatusText.Text = count == 0 ? T("Для этого элемента разметка пока не добавлена.", "This element has no regions yet.") : T($"{element.Name} — областей: {count}.", $"{element.Name} — regions: {count}.");
     }
     private void ClearPolygons()
     {
         if (Desk is null) return;
-        for (var i = Desk.Children.Count - 1; i >= 0; i--) if (Desk.Children[i] is Polygon) Desk.Children.RemoveAt(i);
+        for (var i = Desk.Children.Count - 1; i >= 0; i--) if (Desk.Children[i] is Shape) Desk.Children.RemoveAt(i);
     }
     private void Outline_Changed(object sender, RoutedEventArgs e) => UpdateOutlineStyle();
     private void Outline_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) => UpdateOutlineStyle();
@@ -470,7 +497,7 @@ public partial class MainWindow : Window
         var (r, g, b) = hue switch { < 60 => (1d, x, 0d), < 120 => (x, 1d, 0d), < 180 => (0d, 1d, x), < 240 => (0d, x, 1d), _ => (0d, 0d, 1d) };
         var brush = new SolidColorBrush(Color.FromRgb((byte)(r * 255), (byte)(g * 255), (byte)(b * 255)));
         brush.Freeze();
-        foreach (var polygon in Desk.Children.OfType<Polygon>())
+        foreach (var polygon in Desk.Children.OfType<Shape>())
         {
             polygon.Fill = polygon.Stroke = brush;
             polygon.StrokeThickness = 1.5 / Math.Max(.001, ImageScale.ScaleX);

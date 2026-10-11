@@ -5,6 +5,7 @@ Viewer/dist/
 artifacts/
 *.user
 *.suo
+*_wpftmp.csproj
 .vs/
 TestResults/
 playwright-report/

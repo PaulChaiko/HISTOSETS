@@ -44,11 +44,11 @@ public sealed partial class CatalogStore : IDisposable
                 Validate(connection, allowLegacy: true);
                 version = SchemaVersion(connection);
             }
-            if (version == 1)
+            if (version < CatalogDatabase.Version)
             {
                 var backups = Path.Combine(RootDirectory, "BACKUPS");
                 Directory.CreateDirectory(backups);
-                var path = Path.Combine(backups, "before-schema2-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".histosets");
+                var path = Path.Combine(backups, "before-schema3-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".histosets");
                 // This snapshot must contain every referenced file before the first database write.
                 CreateBackup(path);
                 LastMigrationBackupPath = path;
@@ -56,11 +56,12 @@ public sealed partial class CatalogStore : IDisposable
                 {
                     using var connection = Open(DatabasePath, SqliteOpenMode.ReadWrite);
                     using var transaction = connection.BeginTransaction();
-                    ApplyVersion2(connection, transaction, DefaultCatalogName(RootDirectory));
+                    if (version == 1) ApplyVersion2(connection, transaction, DefaultCatalogName(RootDirectory));
+                    ApplyVersion3(connection, transaction);
                     Validate(connection, transaction: transaction);
                     transaction.Commit();
                 }
-                catch (Exception ex) when (ex is SqliteException or CatalogStorageException)
+                catch (Exception ex) when (ex is SqliteException or CatalogStorageException or ArgumentException or FormatException)
                 {
                     throw new CatalogStorageException("Не удалось обновить структуру каталога. Резервная копия: " + path, ex);
                 }
@@ -148,21 +149,19 @@ public sealed partial class CatalogStore : IDisposable
         while (reader.Read())
         {
             var polygons = new List<AtlasPolygon>();
+            var geometryRegions = new List<AtlasRegion>();
             using var regions = Command(connection, """
-                SELECT id FROM regions WHERE element_id = $element AND material_image_id = $image
+                SELECT id,geometry_json FROM regions WHERE element_id = $element AND material_image_id = $image
                 AND deleted_utc IS NULL ORDER BY sort_order, id;
                 """, null, ("$element", reader.GetString(0)), ("$image", materialImage));
             using var regionReader = regions.ExecuteReader();
             while (regionReader.Read())
             {
-                var points = new List<AtlasPoint>();
-                using var pointCommand = Command(connection, "SELECT x,y FROM region_points WHERE region_id = $id ORDER BY ordinal;",
-                    null, ("$id", regionReader.GetString(0)));
-                using var pointReader = pointCommand.ExecuteReader();
-                while (pointReader.Read()) points.Add(new(pointReader.GetDouble(0), pointReader.GetDouble(1)));
-                polygons.Add(new(points));
+                var geometry = RegionGeometryCodec.Deserialize(regionReader.GetString(1));
+                geometryRegions.Add(new(Guid.Parse(regionReader.GetString(0)),geometry));
+                polygons.Add(RegionGeometryCodec.ToPolygon(geometry));
             }
-            elements.Add(new(reader.GetString(1), reader.GetString(2), reader.GetString(3), polygons) { Id = Guid.Parse(reader.GetString(0)) });
+            elements.Add(new(reader.GetString(1), reader.GetString(2), reader.GetString(3), polygons) { Id = Guid.Parse(reader.GetString(0)), Regions = geometryRegions });
         }
         return elements;
     }

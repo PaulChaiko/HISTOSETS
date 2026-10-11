@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using HistOSets.Storage;
+using HistOSets.Core;
 using Microsoft.Data.Sqlite;
 
 internal static class FoundationChecks
@@ -45,8 +46,8 @@ internal static class FoundationChecks
         long savedRevision;
         using (var store = new CatalogStore(legacy))
         {
-            Check(Convert.ToInt64(Query(legacyDb, "PRAGMA user_version;")) == 2 && Convert.ToInt64(Query(legacyDb, "SELECT COUNT(*) FROM schema_migrations;")) == 2,
-                "Schema1 migrates to schema2 with an explicit migration ledger");
+            Check(Convert.ToInt64(Query(legacyDb, "PRAGMA user_version;")) == 3 && Convert.ToInt64(Query(legacyDb, "SELECT COUNT(*) FROM schema_migrations;")) == 3,
+                "Schema1 migrates to schema3 with an explicit migration ledger");
             Check(before == ContentSnapshot(legacyDb, tables, true), "Migration preserves all original UUIDs, revisions, geometry, text, und and legacy tag links exactly");
             Check(Equals(originalCatalogId, Query(legacyDb, "SELECT catalog_id FROM catalog_metadata;")), "Migration retains catalog identity");
             Check(store.LoadTaxonomy().Groups.Count(g => g.IsSystem) == 6 && store.LoadTaxonomy().Groups.Single(g => g.Id == legacyGroup).IsSystem == false,
@@ -156,17 +157,17 @@ internal static class FoundationChecks
         }
         using (var reopened = new CatalogStore(legacy))
             Check(reopened.LastMigrationBackupPath is null && Directory.GetFiles(Path.Combine(legacy, "BACKUPS"), "*.histosets").Length == 1,
-                "Reopening schema2 does not migrate or create redundant migration backups");
+                "Reopening schema3 does not migrate or create redundant migration backups");
 
-        var restoredTwo = Path.Combine(temp, "RestoreSchema2Foundation");
+        var restoredTwo = Path.Combine(temp, "RestoreSchema3Foundation");
         CatalogStore.RestoreBackup(foundationBackup, restoredTwo);
         using (var restored = new CatalogStore(restoredTwo))
         {
             Check(restored.GetMetadata().Name == "Учебный каталог" && restored.GetMetadata().ContentRevision == savedRevision &&
                 restored.Load().Specimens.First(s => s.MaterialId == Guid.Parse(material)).AnalogGroupId == persistentAnalog,
-                "Schema2 backup restores catalog metadata, analog identities and assignments");
+                "Schema3 backup restores catalog metadata, analog identities and assignments");
             Check(Convert.ToDouble(Query(restored.DatabasePath, "SELECT pixel_size_y_m FROM image_calibrations;")) == 0.000005,
-                "Schema2 backup preserves independent physical X/Y calibration and provenance");
+                "Schema3 backup preserves independent physical X/Y calibration and provenance");
         }
 
         var restoredOne = Path.Combine(temp, "RestoreOriginalSchema1");
@@ -194,20 +195,20 @@ internal static class FoundationChecks
         Check(Hash(missingDb) == missingHash && Convert.ToInt64(Query(missingDb, "PRAGMA user_version;")) == 1,
             "A failed full backup leaves schema1 and data untouched");
 
-        using (var empty = new CatalogStore(Path.Combine(temp, "EmptySchema2")))
+        using (var empty = new CatalogStore(Path.Combine(temp, "EmptySchema3")))
         {
-            Check(empty.GetMetadata().FormatVersion == 2 && empty.GetStatistics().Materials == 0 && empty.LoadTaxonomy().Groups.Count == 6,
-                "New empty catalog starts directly at schema2 with fixed types and no invented materials");
+            Check(empty.GetMetadata().FormatVersion == 3 && empty.GetStatistics().Materials == 0 && empty.LoadTaxonomy().Groups.Count == 6,
+                "New empty catalog starts directly at schema3 with fixed types and no invented materials");
             Check(empty.LastMigrationBackupPath is null, "A genuinely new catalog does not require a schema1 backup");
         }
         return count;
     }
 
-    private static string MakeSchema1(string source, string backup, string root)
+    internal static string MakeSchema1(string source, string backup, string root)
     {
         CatalogStore.RestoreBackup(backup, root);
         var db = Path.Combine(root, "catalog.sqlite");
-        var copy = Path.Combine(root, "schema2-copy.sqlite");
+        var copy = Path.Combine(root, "schema3-copy.sqlite");
         File.Move(db, copy);
         using (var connection = Open(db))
         {
@@ -225,6 +226,37 @@ internal static class FoundationChecks
             {
                 if (table == "schema_migrations") { Execute(connection, "INSERT INTO schema_migrations SELECT * FROM previous.schema_migrations WHERE version=1;"); continue; }
                 if (table == "catalog_metadata") { Execute(connection, "INSERT INTO catalog_metadata SELECT singleton,catalog_id,1,created_utc FROM previous.catalog_metadata;"); continue; }
+                if (table == "region_points")
+                {
+                    var points = new List<(string Id,RegionGeometry Geometry)>();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText="SELECT id,geometry_json FROM previous.regions ORDER BY id;";
+                        using var reader=command.ExecuteReader();
+                        while(reader.Read()) points.Add((reader.GetString(0),RegionGeometryCodec.Deserialize(reader.GetString(1))));
+                    }
+                    // Build the legacy fixture as one batch; per-vertex autocommit causes
+                    // thousands of durable disk flushes, especially expensive on Windows.
+                    using var transaction=connection.BeginTransaction();
+                    using var insert=connection.CreateCommand();
+                    insert.Transaction=transaction;
+                    insert.CommandText="INSERT INTO region_points VALUES($id,$ordinal,$x,$y);";
+                    insert.Parameters.Add("$id",SqliteType.Text);
+                    insert.Parameters.Add("$ordinal",SqliteType.Integer);
+                    insert.Parameters.Add("$x",SqliteType.Real);
+                    insert.Parameters.Add("$y",SqliteType.Real);
+                    foreach(var region in points)
+                        for(var i=0;i<region.Geometry.Points.Count;i++)
+                        {
+                            insert.Parameters["$id"].Value=region.Id;
+                            insert.Parameters["$ordinal"].Value=i;
+                            insert.Parameters["$x"].Value=region.Geometry.Points[i].X;
+                            insert.Parameters["$y"].Value=region.Geometry.Points[i].Y;
+                            insert.ExecuteNonQuery();
+                        }
+                    transaction.Commit();
+                    continue;
+                }
                 var columns = Columns(connection, table);
                 var filter = table switch
                 {
@@ -284,6 +316,20 @@ internal static class FoundationChecks
         var result = new Dictionary<string, List<object?[]>>();
         foreach (var (table, columns) in tables)
         {
+            if(migrated && table=="region_points")
+            {
+                var pointRows=new List<object?[]>();
+                using var geometryCommand=connection.CreateCommand();
+                geometryCommand.CommandText="SELECT id,geometry_json FROM regions ORDER BY id;";
+                using var geometryReader=geometryCommand.ExecuteReader();
+                while(geometryReader.Read())
+                {
+                    var points=RegionGeometryCodec.Deserialize(geometryReader.GetString(1)).Points;
+                    for(var i=0;i<points.Count;i++) pointRows.Add([geometryReader.GetString(0),(long)i,points[i].X,points[i].Y]);
+                }
+                result[table]=pointRows;
+                continue;
+            }
             var filter = !migrated ? "" : table switch
             {
                 "tag_groups" => " WHERE is_system=0",

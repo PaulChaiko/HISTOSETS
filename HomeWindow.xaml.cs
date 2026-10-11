@@ -57,10 +57,10 @@ public partial class HomeWindow : Window
         CreateButton.Content = T("Создать пустую базу данных…", "Create empty database…");
         ViewButton.Content = T("Просмотр", "View");
         SelfTestButton.Content = T("Самопроверка — в следующих обновлениях", "Self-test — coming in later updates");
-        EditButton.Content = T("Редактирование объектов — в следующих обновлениях", "Object editor — coming in later updates");
+        EditButton.Content = T("Редактирование", "Edit");
         ManageButton.Content = T("Управление базой и резервные копии…", "Database management and backups…");
         DemoButton.Content = T("Создать учебную демонстрационную базу…", "Create demonstration database…");
-        VersionLabel.Text = T("Интерактивный атлас · update5.1", "Interactive atlas · update5.1");
+        VersionLabel.Text = T("Интерактивный атлас · update5.2 · 0.5.2", "Interactive atlas · update5.2 · 0.5.2");
         LanguageButton.ToolTip = T("Переключить интерфейс и данные на английский", "Switch interface and content to Russian");
         if (statusFactory is not null) StatusText.Text = statusFactory();
         RefreshSummary();
@@ -69,7 +69,7 @@ public partial class HomeWindow : Window
     private static string T(string ru, string en) => UiLanguage.T(ru, en);
     private void RefreshSummary()
     {
-        ViewButton.IsEnabled = store is not null;
+        ViewButton.IsEnabled = EditButton.IsEnabled = store is not null;
         DemoButton.Visibility = store is null ? Visibility.Visible : Visibility.Collapsed;
         if (store is null)
         {
@@ -220,6 +220,13 @@ public partial class HomeWindow : Window
     {
         if (store is null || busy) return;
         try { new MainWindow(store, ownsStore: false) { Owner = this }.ShowDialog(); }
+        catch (Exception ex) { ShowError(ex); }
+        RefreshSummary();
+    }
+    private void Edit_Click(object sender, RoutedEventArgs e)
+    {
+        if (store is null || busy) return;
+        try { new EditorCatalogWindow(store) { Owner = this }.ShowDialog(); }
         catch (Exception ex) { ShowError(ex); }
         RefreshSummary();
     }
