@@ -8,7 +8,7 @@ using HistOSets.Storage;
 
 namespace HistOSets;
 
-/// <summary>Read-only preparation and eligibility review. This window does not execute or save attempts.</summary>
+/// <summary>Read-only preparation, eligibility review and launch of a session against a revalidated catalog snapshot.</summary>
 public partial class TrainingSetupWindow : Window
 {
     private readonly CatalogStore store;
@@ -20,6 +20,7 @@ public partial class TrainingSetupWindow : Window
     private bool updating;
     private bool closed;
     private bool initialized;
+    private long inputVersion;
     private Func<string>? statusFactory;
     private sealed record TagChoice(Guid Id, string Label, string SearchText);
     private sealed record OrderChoice(TrainingOrder Value, string Label);
@@ -28,6 +29,7 @@ public partial class TrainingSetupWindow : Window
 
     public TrainingCatalog? Catalog { get; private set; }
     public TrainingPlan? Plan { get; private set; }
+    public TrainingSessionWindow? ActiveSession { get; private set; }
     public bool IsBusy => busy;
 
     public TrainingSetupWindow(CatalogStore store)
@@ -73,8 +75,8 @@ public partial class TrainingSetupWindow : Window
         var order = CurrentOrder;
         Title = T("HISTOSETS — подготовка самопроверки", "HISTOSETS — self-test preparation");
         Heading.Text = T("Подготовка самопроверки", "Prepare a self-test");
-        StageNotice.Text = T("В update7.1 можно проверить материалы и сформировать план. Выполнение заданий и оценивание появятся на следующих этапах.",
-            "In update7.1 you can check materials and prepare a plan. Question execution and scoring will follow in later stages.");
+        StageNotice.Text = T("В update7.2 доступны пять методов распознавания с проверкой ответов. Обведение можно включить в предварительный план; выполнение этого метода появится в update7.3.",
+            "Update7.2 provides five recognition methods with answer checking. Outlining can be included in the preview plan; this method will become playable in update7.3.");
         SetupTab.Header = T("Настройка занятия", "Session setup");
         PlanTab.Header = T("Проверка и план", "Review and plan");
         TargetHeading.Text = T("1. Объекты для заданий", "1. Question targets");
@@ -91,17 +93,18 @@ public partial class TrainingSetupWindow : Window
         OrderSelector.ItemsSource = new[] { new OrderChoice(TrainingOrder.Random, T("Случайный", "Random")),
             new OrderChoice(TrainingOrder.ByMethod, T("По методам", "By method")), new OrderChoice(TrainingOrder.ByObject, T("По объектам", "By object")) };
         OrderSelector.SelectedValue = order;
-        PoolHint.Text = T("Выбранные карточки определяют темы заданий. Справочники ответов и варианты изображений берутся из всей базы; аналоги учитываются как один правильный ответ. В будущих заданиях названия будут выбираться из списка с поиском.",
-            "Selected cards determine question targets. Answer dictionaries and image choices use the whole catalog; analogs count as one correct answer. Future naming questions will use a searchable answer list.");
+        PoolHint.Text = T("Выбранные карточки определяют темы заданий. Справочники ответов и варианты изображений берутся из всей базы; аналоги учитываются как один правильный ответ. Названия выбираются из списка с поиском.",
+            "Selected cards determine question targets. Answer dictionaries and image choices use the whole catalog; analogs count as one correct answer. Names are selected from a searchable answer list.");
         EligibilityHeading.Text = T("Пригодность по объектам и методам", "Eligibility by object and method");
         EligibilityMaterialColumn.Header = QueueMaterialColumn.Header = T("Объект", "Object");
         EligibilityMethodColumn.Header = QueueMethodColumn.Header = T("Метод", "Method");
         EligibilityCountColumn.Header = T("Заданий", "Questions");
         EligibilityReasonColumn.Header = T("Причины исключения и замечания", "Exclusion reasons and notes");
         QueueAnswerColumn.Header = T("Эталонный ответ", "Expected answer");
-        QueueHeading.Text = T("Очередь заданий — предварительный просмотр", "Question queue — preview");
+        QueueHeading.Text = T("Предварительный просмотр для автора — содержит ответы", "Author preview — contains answers");
         RefreshButton.Content = T("Обновить материалы", "Refresh materials");
         BuildPlanButton.Content = T("Сформировать план", "Build plan");
+        StartSessionButton.Content = T("Начать занятие", "Start session");
         CloseButton.Content = T("Закрыть", "Close");
         LanguageButton.ToolTip = T("Переключить интерфейс и язык заданий на английский", "Switch interface and question language to Russian");
         foreach (var row in methods) row.RefreshLanguage();
@@ -195,6 +198,7 @@ public partial class TrainingSetupWindow : Window
         var fingerprint = Catalog.SourceFingerprint;
         SetBusy(true);
         ClearPlan();
+        var version = inputVersion;
         ShowStatus(() => T("Повторная проверка материалов и формирование плана…", "Rechecking materials and building the plan…"));
         try
         {
@@ -211,19 +215,67 @@ public partial class TrainingSetupWindow : Window
                     "The database or image files changed. Data has been refreshed. Review your selection and choose Build plan again."));
                 return;
             }
+            if (version != inputVersion)
+            {
+                ShowStatus(() => T("Настройки или язык изменились во время проверки. Сформируйте план заново.",
+                    "Settings or language changed during verification. Build the plan again."));
+                return;
+            }
             Plan = result.Plan;
             RenderPlan();
             TrainingTabs.SelectedItem = PlanTab;
-            ShowStatus(() => T("План сформирован без изменения базы. Это предварительный просмотр; занятие ещё не запускается.",
-                "The plan was prepared without changing the database. This is a preview; the session does not start yet."));
+            ShowStatus(() => ExecutableCount(result.Plan) > 0
+                ? T("План сформирован. Просмотрите пригодность материалов и нажмите «Начать занятие». Предварительный просмотр содержит эталонные ответы.",
+                    "Plan prepared. Review material eligibility and choose Start session. The preview contains expected answers.")
+                : T("В плане нет доступных заданий распознавания. Выберите другие методы или материалы; выполнение обведения появится в update7.3.",
+                    "The plan has no playable recognition questions. Select other methods or materials; outlining will become playable in update7.3."));
         }
         catch (Exception ex) { ClearPlan(); ShowError(ex); }
         finally { SetBusy(false); }
     }
 
+    public async Task StartSessionAsync()
+    {
+        if (busy || closed || Catalog is null || Plan is not { } plan || ExecutableCount(plan) == 0) return;
+        SetBusy(true);
+        ShowStatus(() => T("Проверка материалов перед началом занятия…", "Verifying materials before starting the session…"));
+        try
+        {
+            var result = await Task.Run(() => (Catalog: store.CaptureTrainingCatalog(ImageLoader.ReadMetadata), Taxonomy: store.LoadTaxonomy()));
+            InstallCatalog(result.Catalog, result.Taxonomy);
+            if (result.Catalog.CatalogId != plan.CatalogId || result.Catalog.SourceFingerprint != plan.SourceFingerprint)
+            {
+                ClearPlan();
+                TrainingTabs.SelectedItem = SetupTab;
+                ShowStatus(() => T("База или файлы изображений изменились после формирования плана. Данные обновлены. Проверьте выбор и сформируйте новый план перед началом занятия.",
+                    "The database or image files changed after the plan was prepared. Data has been refreshed. Review your selection and build a new plan before starting."));
+                return;
+            }
+            if (!ReferenceEquals(Plan, plan) || !string.Equals(plan.Configuration.Locale, UiLanguage.Locale, StringComparison.OrdinalIgnoreCase))
+            {
+                ClearPlan();
+                ShowStatus(() => T("Настройки или язык изменились во время проверки. Сформируйте план заново.",
+                    "Settings or language changed during verification. Build the plan again."));
+                return;
+            }
+            ActiveSession = new TrainingSessionWindow(result.Catalog, plan) { Owner = this };
+            ActiveSession.ShowDialog();
+            ShowStatus(() => ReferenceEquals(Plan, plan)
+                ? T("Занятие закрыто. План сохранён в этом окне; можно начать новое занятие с повторной проверкой материалов.",
+                    "Session closed. The plan remains in this window; you can start a new session after materials are rechecked.")
+                : T("Занятие закрыто. Настройки изменились; сформируйте план заново.",
+                    "Session closed. Settings changed; build the plan again."));
+        }
+        catch (Exception ex) { ClearPlan(); ShowError(ex); }
+        finally { ActiveSession = null; SetBusy(false); }
+    }
+
+    private static int ExecutableCount(TrainingPlan plan) => plan.Questions.Count(question => question.Method != TrainingMethod.TraceElement);
+
     private void InputsChanged()
     {
         if (!initialized || updating) return;
+        inputVersion++;
         if (Plan is not null)
         {
             ClearPlan();
@@ -235,8 +287,9 @@ public partial class TrainingSetupWindow : Window
 
     private void ClearPlan()
     {
+        inputVersion++;
         Plan = null;
-        if (initialized) RenderPlan();
+        if (initialized) { RenderPlan(); RefreshCommands(); }
     }
 
     private void RenderPlan()
@@ -259,6 +312,10 @@ public partial class TrainingSetupWindow : Window
         var excluded = plan.Eligibility.Count(item => !item.IsEligible);
         PlanHint.Text = T($"Недоступных сочетаний объект–метод: {excluded}. Справочник ответов: объектов — {plan.ObjectAnswers.Count}, элементов — {plan.ElementAnswers.Count}. Язык: русский.",
             $"Unavailable object/method pairs: {excluded}. Answer dictionary: {plan.ObjectAnswers.Count} objects, {plan.ElementAnswers.Count} elements. Language: English.");
+        var executableCount = ExecutableCount(plan);
+        var deferredCount = plan.QuestionCount - executableCount;
+        PlanHint.Text += T($"\nВ занятие войдёт заданий распознавания: {executableCount}. Обведение отложено до update7.3: {deferredCount}.",
+            $"\nRecognition questions in this session: {executableCount}. Outlining questions deferred until update7.3: {deferredCount}.");
         EligibilityList.ItemsSource = plan.Eligibility.Select(item => new EligibilityRow(MaterialName(item.MaterialId), MethodLabel(item.Method), item.QuestionCount,
             item.Issues.Count == 0 ? T("Материал пригоден", "Material is eligible") : string.Join("\n", item.Issues.Select(issue => IssueLabel(item.MaterialId, issue))))).ToArray();
         QueueList.ItemsSource = plan.Questions.Select((question, index) => new QueueRow(index + 1, MethodLabel(question.Method), MaterialName(question.MaterialId), question.Answer.Name, question)).ToArray();
@@ -340,7 +397,7 @@ public partial class TrainingSetupWindow : Window
         TrainingMethod.NameObjectImage => T("Определить объект по изображению", "Identify an object from an image"),
         TrainingMethod.ChooseImage => T("Выбрать изображение по названию", "Choose an image by name"),
         TrainingMethod.NameElementRegion => T("Определить элемент по области", "Identify an element from a region"),
-        TrainingMethod.TraceElement => T("Обвести элемент", "Outline an element"),
+        TrainingMethod.TraceElement => T("Обвести элемент — выполнение в update7.3", "Outline an element — playable in update7.3"),
         TrainingMethod.NameObjectDescription => T("Определить объект по описанию", "Identify an object from a description"),
         TrainingMethod.NameElementDescription => T("Определить элемент по описанию", "Identify an element from a description"),
         _ => throw new ArgumentOutOfRangeException(nameof(method))
@@ -412,6 +469,12 @@ public partial class TrainingSetupWindow : Window
     {
         if (!initialized) return;
         BuildPlanButton.IsEnabled = !busy && Catalog is not null && materials.Any(row => row.IsSelected) && methods.Any(row => row.IsSelected);
+        StartSessionButton.IsEnabled = !busy && Catalog is not null && Plan is { } plan && ExecutableCount(plan) > 0;
+        StartSessionButton.ToolTip = Plan is null
+            ? T("Сначала сформируйте план занятия.", "Build the session plan first.")
+            : ExecutableCount(Plan) == 0
+                ? T("Нет доступных заданий распознавания. Выполнение обведения появится в update7.3.", "No playable recognition questions. Outlining will become playable in update7.3.")
+                : T("Материалы будут проверены повторно. Обведение не включается в занятие update7.2.", "Materials will be rechecked. Outlining is not included in an update7.2 session.");
     }
     private void ShowStatus(Func<string> value) { statusFactory = value; OperationStatus.Text = value(); }
     private void ShowError(Exception ex)
@@ -445,6 +508,7 @@ public partial class TrainingSetupWindow : Window
     }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await ReloadCatalogAsync();
     private async void BuildPlan_Click(object sender, RoutedEventArgs e) => await BuildPlanAsync();
+    private async void StartSession_Click(object sender, RoutedEventArgs e) => await StartSessionAsync();
     private void Language_Click(object sender, RoutedEventArgs e)
     {
         try { UiLanguage.Set(UiLanguage.Locale == "ru" ? "en" : "ru"); }

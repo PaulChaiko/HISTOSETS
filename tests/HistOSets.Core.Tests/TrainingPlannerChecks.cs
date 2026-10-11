@@ -54,6 +54,19 @@ internal static class TrainingPlannerChecks
         var alt2 = Material(5, "Поле второе", [Image(105, "sha-e")], analog: group.Id);
         check(Plan(Catalog([alt1, alt2, b, c, d], [group]), [d.Id], [TrainingMethod.ChooseImage]).QuestionCount == 1,
             "Training: image matching can select another analog file to avoid duplicate distractor hashes");
+        var extra = Material(6, "Сердце", [Image(106, "sha-f")]);
+        var multipleViews = Material(1, "Кожа", [Image(101, "sha-a"), Image(111, "sha-b", primary: false)]);
+        var noSafeChoices = Plan(Catalog([multipleViews, b, c, d]), [multipleViews.Id], [TrainingMethod.ChooseImage]);
+        check(noSafeChoices.QuestionCount == 0 && Has(noSafeChoices, TrainingIssueCode.InsufficientImageChoices),
+            "Training: a target's secondary view cannot masquerade as a wrong image under another object's name");
+        var safeChoices = Plan(Catalog([multipleViews, b, c, d, extra]), [multipleViews.Id], [TrainingMethod.ChooseImage]);
+        check(safeChoices.QuestionCount == 1 && safeChoices.Questions[0].ImageChoices.Count == 4
+            && safeChoices.Questions[0].ImageChoices.All(i => i.Sha256 != "sha-b"),
+            "Training: another safe distractor replaces a duplicated secondary target image");
+        var otherAnalogView = Material(5, "", [Image(105, "sha-b")], analog: group.Id);
+        var analogSafeChoices = Plan(Catalog([a1, otherAnalogView, b, c, d, extra], [group]), [a1.Id], [TrainingMethod.ChooseImage]);
+        check(analogSafeChoices.QuestionCount == 1 && analogSafeChoices.Questions[0].ImageChoices.All(i => i.Sha256 != "sha-b"),
+            "Training: images of every target analog member stay out of distractors even when its own name is missing");
         var duplicateName = Material(5, "  КОЖА! ", [Image(105, "sha-e")]);
         var ambiguous = Plan(Catalog([a, duplicateName, b, c, d]), [a.Id, duplicateName.Id], [TrainingMethod.NameObjectImage]);
         check(ambiguous.QuestionCount == 0 && Has(ambiguous, TrainingIssueCode.AmbiguousName),

@@ -110,6 +110,7 @@
             <WrapPanel HorizontalAlignment="Right">
                 <Button x:Name="RefreshButton" Click="Refresh_Click"/>
                 <Button x:Name="BuildPlanButton" Click="BuildPlan_Click" Background="{StaticResource SpecimenListBrush}"/>
+                <Button x:Name="StartSessionButton" Click="StartSession_Click" Background="{StaticResource SpecimenListBrush}"/>
                 <Button x:Name="CloseButton" IsCancel="True" Margin="8,0,0,0"/>
             </WrapPanel>
         </StackPanel>

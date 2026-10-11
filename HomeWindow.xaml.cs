@@ -56,12 +56,12 @@ public partial class HomeWindow : Window
         FolderButton.Content = T("Выбрать папку…", "Choose folder…");
         CreateButton.Content = T("Создать пустую базу данных…", "Create empty database…");
         ViewButton.Content = T("Просмотр", "View");
-        SelfTestButton.Content = T("Самопроверка — подготовка занятия…", "Self-test — prepare a session…");
+        SelfTestButton.Content = T("Самопроверка…", "Self-test…");
         EditButton.Content = T("Редактирование", "Edit");
         ExchangeButton.Content = T("Обмен материалами…", "Exchange materials…");
         ManageButton.Content = T("Управление базой и резервные копии…", "Database management and backups…");
         DemoButton.Content = T("Создать учебную демонстрационную базу…", "Create demonstration database…");
-        VersionLabel.Text = T("Интерактивный атлас · update7.1 · 0.7.1", "Interactive atlas · update7.1 · 0.7.1");
+        VersionLabel.Text = T("Интерактивный атлас · update7.2 · 0.7.2", "Interactive atlas · update7.2 · 0.7.2");
         LanguageButton.ToolTip = T("Переключить интерфейс и данные на английский", "Switch interface and content to Russian");
         if (statusFactory is not null) StatusText.Text = statusFactory();
         RefreshSummary();
