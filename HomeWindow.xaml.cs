@@ -60,7 +60,7 @@ public partial class HomeWindow : Window
         EditButton.Content = T("Редактирование", "Edit");
         ManageButton.Content = T("Управление базой и резервные копии…", "Database management and backups…");
         DemoButton.Content = T("Создать учебную демонстрационную базу…", "Create demonstration database…");
-        VersionLabel.Text = T("Интерактивный атлас · update5.2 · 0.5.2", "Interactive atlas · update5.2 · 0.5.2");
+        VersionLabel.Text = T("Интерактивный атлас · update5.3 · 0.5.3", "Interactive atlas · update5.3 · 0.5.3");
         LanguageButton.ToolTip = T("Переключить интерфейс и данные на английский", "Switch interface and content to Russian");
         if (statusFactory is not null) StatusText.Text = statusFactory();
         RefreshSummary();

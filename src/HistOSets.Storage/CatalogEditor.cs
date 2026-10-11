@@ -74,7 +74,8 @@ public sealed partial class CatalogStore
             while (reader.Read()) result.Images.Add(new()
             {
                 Id = Guid.Parse(reader.GetString(0)), ImageId = Guid.Parse(reader.GetString(1)), ManagedPath = StorageFiles.Resolve(RootDirectory,reader.GetString(2)),
-                Metadata = new(reader.GetInt32(3),reader.GetInt32(4),reader.GetDouble(5),reader.GetDouble(6),reader.GetString(7),reader.GetInt32(8)), IsPrimary = reader.GetBoolean(9)
+                Metadata = new(reader.GetInt32(3),reader.GetInt32(4),reader.GetDouble(5),reader.GetDouble(6),reader.GetString(7),reader.GetInt32(8)), IsPrimary = reader.GetBoolean(9),
+                Calibration = ReadCalibration(connection, Guid.Parse(reader.GetString(0)), transaction)
             });
         using (var command = Command(connection, "SELECT id FROM elements WHERE material_id=$id AND deleted_utc IS NULL ORDER BY sort_order,id;", transaction, ("$id", key)))
         using (var reader = command.ExecuteReader())
@@ -206,6 +207,7 @@ public sealed partial class CatalogStore
                         RequireOwner(connection,transaction,"material_images",image.Id,"material_id",draft.Id);
                         SaveEditorRow(connection,transaction,"material_images",image.Id,now,origin,
                             [("material_id",draft.Id.ToString()),("image_id",asset.ImageId.ToString()),("sort_order",i),("is_primary",image.IsPrimary?1:0)]);
+                        SaveCalibration(connection,transaction,image,asset.Metadata,now,origin);
                     }
                     for(var e=0;e<draft.Elements.Count;e++)
                     {
@@ -276,6 +278,12 @@ public sealed partial class CatalogStore
         }
         Unique(draft.Images.Select(i=>i.Id)); Unique(draft.Elements.Select(e=>e.Id)); Unique(draft.Elements.SelectMany(e=>e.Regions).Select(r=>r.Id));
         if(draft.Images.Count(i=>i.IsPrimary)>1) throw new CatalogStorageException("У объекта может быть только одно основное изображение.");
+        foreach(var image in draft.Images)
+            if(image.Calibration is { } calibration)
+            {
+                try { calibration.Validate(); }
+                catch(ArgumentException ex) { throw new CatalogStorageException("Некорректная физическая калибровка изображения.",ex); }
+            }
         var images=draft.Images.Select(i=>i.Id).ToHashSet();
         foreach(var region in draft.Elements.SelectMany(e=>e.Regions))
         {

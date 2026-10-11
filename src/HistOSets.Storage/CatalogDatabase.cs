@@ -7,7 +7,7 @@ namespace HistOSets.Storage;
 internal static class CatalogDatabase
 {
     internal const int ApplicationId = 0x48535453; // HSTS
-    internal const int Version = 3;
+    internal const int Version = 4;
 
     internal static SqliteConnection Open(string path, SqliteOpenMode mode = SqliteOpenMode.ReadOnly)
     {
@@ -36,6 +36,7 @@ internal static class CatalogDatabase
             ("$id", Guid.NewGuid().ToString()), ("$now", StorageFiles.UtcNow()));
         ApplyVersion2(connection, transaction, name);
         ApplyVersion3(connection, transaction);
+        ApplyVersion4(connection, transaction);
         Validate(connection, transaction: transaction);
         transaction.Commit();
     }
@@ -82,7 +83,7 @@ internal static class CatalogDatabase
         var appId = Convert.ToInt64(Scalar(connection, "PRAGMA application_id;", transaction));
         if (appId != ApplicationId) throw new CatalogStorageException("Выбранный файл не является базой HISTOSETS.");
         var version = Convert.ToInt64(Scalar(connection, "PRAGMA user_version;", transaction));
-        if (version != Version && !(allowLegacy && version is 1 or 2))
+        if (version != Version && !(allowLegacy && version is 1 or 2 or 3))
             throw new CatalogStorageException($"Версия базы {version} не поддерживается этой сборкой (ожидается {Version}). Файл не изменён.");
         if (!Equals(Scalar(connection, "PRAGMA quick_check;", transaction), "ok"))
             throw new CatalogStorageException("Нарушена целостность SQLite. Восстановите резервную копию в другой каталог.");
@@ -127,6 +128,12 @@ internal static class CatalogDatabase
                 catch (FormatException ex) { throw new CatalogStorageException("Повреждено описание области.", ex); }
             }
         }
+        if (version >= 2)
+        {
+            using var command = Command(connection, "SELECT pixel_size_x_m,pixel_size_y_m,source_kind,source_note,input_width,input_height,input_unit FROM image_calibrations;", transaction);
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) CatalogStore.CalibrationFromReader(reader);
+        }
     }
 
     internal static void ApplyVersion3(SqliteConnection connection, SqliteTransaction transaction)
@@ -155,6 +162,15 @@ internal static class CatalogDatabase
             INSERT INTO schema_migrations VALUES(3,$now);
             PRAGMA user_version=3;
             """, transaction, ("$now", StorageFiles.UtcNow()));
+    }
+
+    internal static void ApplyVersion4(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        // Existing JSON is copied verbatim: changing supported tools must not round,
+        // simplify or reserialize scientific contours and their revision history.
+        Execute(connection, Resource("Migrations.004_compound_geometry.sql"), transaction);
+        Execute(connection, "INSERT INTO schema_migrations VALUES(4,$now); PRAGMA user_version=4;", transaction,
+            ("$now", StorageFiles.UtcNow()));
     }
 
     internal static string Resource(string name)

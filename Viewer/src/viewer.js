@@ -47,6 +47,17 @@ const viewer = OpenSeadragon({
   drawer: 'canvas'
 });
 const anno = createOSDAnnotator(viewer, { drawingEnabled: false, drawingMode: 'drag', autoSave: true, userSelectAction: 'SELECT' });
+// Annotorious' POLYGON selector has no hole representation. Keep imported
+// compound regions in a read-only SVG layer, with the same image transform.
+const svgNamespace = 'http://www.w3.org/2000/svg';
+const compoundLayer = document.createElementNS(svgNamespace, 'svg');
+compoundLayer.id = 'compound-regions';
+compoundLayer.setAttribute('aria-hidden', 'true');
+Object.assign(compoundLayer.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none', overflow: 'hidden' });
+const compoundGroup = document.createElementNS(svgNamespace, 'g');
+compoundLayer.append(compoundGroup);
+viewer.canvas.append(compoundLayer);
+let compoundRegions = [];
 let elements = [];
 let originalAnnotations = [];
 let selectedElement = null;
@@ -64,6 +75,44 @@ function style(annotation, state) {
     stroke: active ? '#ffd166' : '#5ee3d9', strokeWidth: active ? 3 : 1.5 };
 }
 anno.setStyle(style);
+function toCompoundRegions(items) {
+  return items.flatMap(element => (element.regions ?? [])
+    .filter(region => region.kind === 'compound')
+    .map((region, index) => ({ id: region.id ?? `${element.id}-compound-${index}`,
+      elementId: element.id, rings: clone(region.rings) })));
+}
+function renderCompoundRegions() {
+  compoundGroup.replaceChildren();
+  for (const region of compoundRegions) {
+    const path = document.createElementNS(svgNamespace, 'path');
+    path.dataset.regionId = region.id;
+    path.dataset.elementId = region.elementId;
+    path.setAttribute('fill-rule', 'evenodd');
+    path.setAttribute('vector-effect', 'non-scaling-stroke');
+    path.setAttribute('d', region.rings.map(ring => ring.map(([x, y], index) => `${index ? 'L' : 'M'}${x} ${y}`).join(' ') + ' Z').join(' '));
+    compoundGroup.append(path);
+  }
+  updateCompoundStyle();
+  updateCompoundTransform();
+}
+function updateCompoundStyle() {
+  compoundLayer.style.display = loaded && $('overlays').checked ? '' : 'none';
+  for (const path of compoundGroup.children) {
+    const active = path.dataset.elementId === selectedElement;
+    path.setAttribute('fill', active ? '#ffd166' : '#5ee3d9');
+    path.setAttribute('fill-opacity', Number($('opacity').value) / 100);
+    path.setAttribute('stroke', active ? '#ffd166' : '#5ee3d9');
+    path.setAttribute('stroke-width', active ? '3' : '1.5');
+  }
+}
+function updateCompoundTransform() {
+  if (!loaded || !viewer.world.getItemAt(0)) return;
+  const origin = viewer.viewport.imageToViewerElementCoordinates(new OpenSeadragon.Point(0, 0));
+  const x = viewer.viewport.imageToViewerElementCoordinates(new OpenSeadragon.Point(1, 0));
+  const y = viewer.viewport.imageToViewerElementCoordinates(new OpenSeadragon.Point(0, 1));
+  compoundGroup.setAttribute('transform', `matrix(${x.x - origin.x} ${x.y - origin.y} ${y.x - origin.x} ${y.y - origin.y} ${origin.x} ${origin.y})`);
+}
+const regionCount = () => anno.getAnnotations().length + compoundRegions.length;
 function toAnnotations(items) {
   return items.flatMap(element => (element.polygons ?? []).map((points, index) => {
     const id = `${element.id}-region-${index}`;
@@ -91,9 +140,11 @@ function renderElements() {
 function selectElement(id) {
   selectedElement = id;
   const element = elements.find(item => item.id === id);
-  const count = anno.getAnnotations().filter(item => item.properties?.elementId === id).length;
+  const count = anno.getAnnotations().filter(item => item.properties?.elementId === id).length
+    + compoundRegions.filter(item => item.elementId === id).length;
   anno.cancelSelected();
   anno.setStyle(style);
+  updateCompoundStyle();
   renderElements();
   setText('selection', `${element?.name ?? 'Элемент'} — ${count ? `областей: ${count}` : 'разметка пока не добавлена'}.`,
     `${element?.name ?? 'Element'} — ${count ? `regions: ${count}` : 'no annotations yet'}.`);
@@ -110,6 +161,7 @@ function setTool(tool) {
     anno.setDrawingMode(tool === 'rectangle' ? 'drag' : 'click');
     anno.setDrawingEnabled(true);
   }
+  updateCompoundStyle();
   if (tool === 'polygon') setText('hint',
     'Щелчками добавьте вершины. Завершите полигон щелчком по первой вершине; Esc — отмена.',
     'Click to add vertices. Click the first vertex to finish the polygon; Esc cancels.');
@@ -122,9 +174,9 @@ function status() {
   if (!loaded || !item) return;
   const size = item.getContentSize();
   const zoom = Math.round(item.viewportToImageZoom(viewer.viewport.getZoom(true)) * 100);
-  setText('status', `${size.x} × ${size.y} пикселей · масштаб ${zoom}% · областей: ${anno.getAnnotations().length}`
+  setText('status', `${size.x} × ${size.y} пикселей · масштаб ${zoom}% · областей: ${regionCount()}`
     + (missingTiles ? ' · Часть тайлов недоступна: проверьте папку пирамиды.' : ''),
-    `${size.x} × ${size.y} pixels · zoom ${zoom}% · regions: ${anno.getAnnotations().length}`
+    `${size.x} × ${size.y} pixels · zoom ${zoom}% · regions: ${regionCount()}`
     + (missingTiles ? ' · Some tiles are unavailable: check the pyramid folder.' : ''));
 }
 function resetAnnotations() {
@@ -132,6 +184,7 @@ function resetAnnotations() {
   selectedElement = null;
   anno.setAnnotations(clone(originalAnnotations));
   anno.setStyle(style);
+  updateCompoundStyle();
   renderElements();
   setText('selection', 'Выберите элемент для подсветки.', 'Select an element to highlight it.');
   status();
@@ -140,6 +193,9 @@ function resetAnnotations() {
 async function load(payload) {
   const generation = ++request;
   loaded = false;
+  compoundRegions = [];
+  compoundGroup.replaceChildren();
+  updateCompoundStyle();
   missingTiles = false;
   setEnabled(false);
   setTool('navigate');
@@ -151,6 +207,7 @@ async function load(payload) {
   elements = payload.elements ?? [];
   currentSource = payload.tileSource;
   originalAnnotations = toAnnotations(elements);
+  compoundRegions = toCompoundRegions(elements);
   setText('title', payload.title ?? 'HISTOSETS', payload.title ?? 'HISTOSETS');
   setText('selection', 'Выберите элемент для подсветки.', 'Select an element to highlight it.');
   $('message').hidden = false;
@@ -168,6 +225,7 @@ async function load(payload) {
       setEnabled(true);
       anno.setVisible($('overlays').checked);
       resetAnnotations();
+      renderCompoundRegions();
       notify({ type: 'loaded' });
     });
     viewer.open(source);
@@ -178,6 +236,7 @@ async function load(payload) {
 }
 function fail(error) {
   loaded = false;
+  updateCompoundStyle();
   setEnabled(false);
   $('message').hidden = false;
   setText('message', 'Изображение недоступно. Проверьте файл и папку с тайлами.', 'The image is unavailable. Check the image file and tile folder.');
@@ -189,6 +248,9 @@ viewer.addHandler('open-failed', fail);
 viewer.addHandler('tile-load-failed', () => { missingTiles = true; status(); notify({ type: 'error' }); });
 viewer.addHandler('animation', status);
 viewer.addHandler('resize', status);
+viewer.addHandler('animation', updateCompoundTransform);
+viewer.addHandler('resize', updateCompoundTransform);
+viewer.addHandler('viewport-change', updateCompoundTransform);
 anno.on('createAnnotation', () => { status(); setText('selection', 'Пробная область создана. Изменения не сохраняются.',
   'Trial region created. Changes are not saved.'); });
 anno.on('updateAnnotation', status);
@@ -202,8 +264,8 @@ anno.on('selectionChanged', annotations => {
 $('zoom-in').addEventListener('click', () => { viewer.viewport.zoomBy(1.5); viewer.viewport.applyConstraints(); });
 $('zoom-out').addEventListener('click', () => { viewer.viewport.zoomBy(1 / 1.5); viewer.viewport.applyConstraints(); });
 $('home').addEventListener('click', () => viewer.viewport.goHome());
-$('opacity').addEventListener('input', () => anno.setStyle(style));
-$('overlays').addEventListener('change', () => { setTool('navigate'); anno.setVisible($('overlays').checked); });
+$('opacity').addEventListener('input', () => { anno.setStyle(style); updateCompoundStyle(); });
+$('overlays').addEventListener('change', () => { setTool('navigate'); anno.setVisible($('overlays').checked); updateCompoundStyle(); });
 $('tool').addEventListener('change', event => setTool(event.target.value));
 $('reset').addEventListener('click', resetAnnotations);
 document.addEventListener('keydown', event => { if (event.key === 'Escape') setTool('navigate'); });
@@ -219,7 +281,7 @@ window.histosetsPreview = Object.freeze({
   load,
   setLocale,
   snapshot: () => ({ loaded, title: $('title').textContent, source: currentSource,
-    annotations: clone(anno.getAnnotations()), selectedElement,
+    annotations: clone(anno.getAnnotations()), compoundRegions: clone(compoundRegions), selectedElement,
     zoom: loaded ? viewer.viewport.getZoom(true) : null }),
   restore: annotations => { if (loaded) { anno.setAnnotations(clone(annotations)); status(); } }
 });

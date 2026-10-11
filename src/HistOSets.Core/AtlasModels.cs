@@ -18,6 +18,7 @@ public sealed record AtlasSpecimen(string Name, string ImagePath, string Summary
     public Guid? ImageId { get; init; }
     public Guid? MaterialImageId { get; init; }
     public bool IsPrimaryImage { get; init; }
+    public ImageCalibration? Calibration { get; init; }
     public string Status { get; init; } = "draft";
     public Guid? AnalogGroupId { get; init; }
     public IReadOnlyDictionary<string, string> AnalogGroupNames { get; init; } = new Dictionary<string, string>();

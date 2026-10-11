@@ -112,15 +112,22 @@ public partial class ViewerPreviewWindow : Window
                     elements = specimen.Elements.Select((element, i) => new
                     {
                         id = "element-" + i, name = element.Name,
-                        // The experimental preview is polygon-only. This projection
-                        // never replaces exact ellipse/rectangle geometry in storage.
+                        // Simple previews never replace exact parametric geometry in
+                        // storage. Compound regions retain every ring and their holes.
                         polygons = (element.Regions.Count > 0
-                            ? element.Regions.Select(region => RegionGeometryCodec.ToPolygon(region.Geometry))
+                            ? element.Regions.Where(region => region.Geometry.Kind != "compound")
+                                .Select(region => RegionGeometryCodec.ToPolygon(region.Geometry))
                             : element.Polygons).Select(polygon => polygon.Points.Select(p =>
                         {
                             var point = element.Regions.Count > 0 ? p : ImageCoordinates.ToPixels(p, specimen.CoordinateSpace, image.DpiX, image.DpiY);
                             return new[] { point.X, point.Y };
-                        }))
+                        })),
+                        regions = element.Regions.Where(region => region.Geometry.Kind == "compound")
+                            .Select(region => new
+                            {
+                                id = region.Id, kind = "compound", fillRule = "evenodd",
+                                rings = region.Geometry.Rings.Select(ring => ring.Select(point => new[] { point.X, point.Y }))
+                            })
                     })
                 });
             }

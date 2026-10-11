@@ -46,8 +46,8 @@ internal static class FoundationChecks
         long savedRevision;
         using (var store = new CatalogStore(legacy))
         {
-            Check(Convert.ToInt64(Query(legacyDb, "PRAGMA user_version;")) == 3 && Convert.ToInt64(Query(legacyDb, "SELECT COUNT(*) FROM schema_migrations;")) == 3,
-                "Schema1 migrates to schema3 with an explicit migration ledger");
+            Check(Convert.ToInt64(Query(legacyDb, "PRAGMA user_version;")) == 4 && Convert.ToInt64(Query(legacyDb, "SELECT COUNT(*) FROM schema_migrations;")) == 4,
+                "Schema1 migrates to schema4 with an explicit migration ledger");
             Check(before == ContentSnapshot(legacyDb, tables, true), "Migration preserves all original UUIDs, revisions, geometry, text, und and legacy tag links exactly");
             Check(Equals(originalCatalogId, Query(legacyDb, "SELECT catalog_id FROM catalog_metadata;")), "Migration retains catalog identity");
             Check(store.LoadTaxonomy().Groups.Count(g => g.IsSystem) == 6 && store.LoadTaxonomy().Groups.Single(g => g.Id == legacyGroup).IsSystem == false,
@@ -157,17 +157,17 @@ internal static class FoundationChecks
         }
         using (var reopened = new CatalogStore(legacy))
             Check(reopened.LastMigrationBackupPath is null && Directory.GetFiles(Path.Combine(legacy, "BACKUPS"), "*.histosets").Length == 1,
-                "Reopening schema3 does not migrate or create redundant migration backups");
+                "Reopening schema4 does not migrate or create redundant migration backups");
 
-        var restoredTwo = Path.Combine(temp, "RestoreSchema3Foundation");
+        var restoredTwo = Path.Combine(temp, "RestoreSchema4Foundation");
         CatalogStore.RestoreBackup(foundationBackup, restoredTwo);
         using (var restored = new CatalogStore(restoredTwo))
         {
             Check(restored.GetMetadata().Name == "Учебный каталог" && restored.GetMetadata().ContentRevision == savedRevision &&
                 restored.Load().Specimens.First(s => s.MaterialId == Guid.Parse(material)).AnalogGroupId == persistentAnalog,
-                "Schema3 backup restores catalog metadata, analog identities and assignments");
+                "Schema4 backup restores catalog metadata, analog identities and assignments");
             Check(Convert.ToDouble(Query(restored.DatabasePath, "SELECT pixel_size_y_m FROM image_calibrations;")) == 0.000005,
-                "Schema3 backup preserves independent physical X/Y calibration and provenance");
+                "Schema4 backup preserves independent physical X/Y calibration and provenance");
         }
 
         var restoredOne = Path.Combine(temp, "RestoreOriginalSchema1");
@@ -195,10 +195,10 @@ internal static class FoundationChecks
         Check(Hash(missingDb) == missingHash && Convert.ToInt64(Query(missingDb, "PRAGMA user_version;")) == 1,
             "A failed full backup leaves schema1 and data untouched");
 
-        using (var empty = new CatalogStore(Path.Combine(temp, "EmptySchema3")))
+        using (var empty = new CatalogStore(Path.Combine(temp, "EmptySchema4")))
         {
-            Check(empty.GetMetadata().FormatVersion == 3 && empty.GetStatistics().Materials == 0 && empty.LoadTaxonomy().Groups.Count == 6,
-                "New empty catalog starts directly at schema3 with fixed types and no invented materials");
+            Check(empty.GetMetadata().FormatVersion == 4 && empty.GetStatistics().Materials == 0 && empty.LoadTaxonomy().Groups.Count == 6,
+                "New empty catalog starts directly at schema4 with fixed types and no invented materials");
             Check(empty.LastMigrationBackupPath is null, "A genuinely new catalog does not require a schema1 backup");
         }
         return count;
@@ -208,7 +208,7 @@ internal static class FoundationChecks
     {
         CatalogStore.RestoreBackup(backup, root);
         var db = Path.Combine(root, "catalog.sqlite");
-        var copy = Path.Combine(root, "schema3-copy.sqlite");
+        var copy = Path.Combine(root, "schema4-copy.sqlite");
         File.Move(db, copy);
         using (var connection = Open(db))
         {

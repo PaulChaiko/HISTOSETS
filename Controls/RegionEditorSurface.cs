@@ -9,7 +9,7 @@ using HistOSets.Services;
 
 namespace HistOSets.Controls;
 
-public enum RegionEditorTool { Pan, Select, Rectangle, Ellipse, Polygon }
+public enum RegionEditorTool { Pan, Select, Rectangle, Ellipse, Polygon, Brush, Eraser }
 public enum RegionEditOperation { Create, Update, Delete }
 
 public sealed class RegionsChangedEventArgs(IReadOnlyList<AtlasRegion> regions, Guid? selectedRegionId,
@@ -20,13 +20,18 @@ public sealed class RegionsChangedEventArgs(IReadOnlyList<AtlasRegion> regions, 
     public RegionEditOperation Operation { get; } = operation;
 }
 
+public sealed class RegionEditFailedEventArgs(string message) : EventArgs
+{
+    public string Message { get; } = message;
+}
+
 /// <summary>
 /// A source-pixel drawing surface. A gesture changes only its preview until PointerUp or
 /// FinishPolygon, then emits one complete operation for the owner's undo history.
 /// </summary>
 public sealed class RegionEditorSurface : FrameworkElement
 {
-    private enum Gesture { None, Pan, Draw, Move, Handle }
+    private enum Gesture { None, Pan, Draw, Move, Handle, Stroke }
     private BitmapSource? image;
     private double imageWidth, imageHeight;
     private IReadOnlyList<AtlasRegion> regions = Array.Empty<AtlasRegion>();
@@ -44,6 +49,11 @@ public sealed class RegionEditorSurface : FrameworkElement
     private int handleIndex = -1;
     private readonly List<AtlasPoint> polygon = [];
     private Point? polygonHover;
+    private Point? pointerViewport;
+    private AtlasPoint lastStrokePoint;
+    private double brushRadius = 16;
+    private double strokeRadius;
+    private bool strokeErases;
     private bool subscribed;
 
     private static readonly Brush Backdrop = FrozenBrush(Color.FromRgb(23, 25, 33));
@@ -75,6 +85,7 @@ public sealed class RegionEditorSurface : FrameworkElement
     public event EventHandler? SelectionChanged;
     public event EventHandler? PendingOperationChanged;
     public event EventHandler? ZoomChanged;
+    public event EventHandler<RegionEditFailedEventArgs>? OperationFailed;
 
     public BitmapSource? ImageSource
     {
@@ -133,10 +144,34 @@ public sealed class RegionEditorSurface : FrameworkElement
         get => canEdit;
         set { if (canEdit == value) return; CancelPendingOperation(); canEdit = value; UpdateCursor(); InvalidateVisual(); }
     }
-    public bool HasPendingOperation => polygon.Count != 0 || gesture is Gesture.Draw or Gesture.Move or Gesture.Handle;
+    /// <summary>The radius of brush and eraser in original image pixels, independent of zoom.</summary>
+    public double BrushRadius
+    {
+        get => brushRadius;
+        set
+        {
+            if (!double.IsFinite(value) || value < 0.01 || value > RegionGeometryOperations.MaxCoordinate)
+                throw new ArgumentOutOfRangeException(nameof(value));
+            if (brushRadius == value) return;
+            brushRadius = value;
+            InvalidateVisual();
+        }
+    }
+    public bool HasPendingPolygon => polygon.Count != 0;
+    public bool HasPendingOperation => polygon.Count != 0 || gesture is Gesture.Draw or Gesture.Move or Gesture.Handle or Gesture.Stroke;
     public double Zoom => zoom;
     private bool HasImage => image is not null && ImageWidth > 0 && ImageHeight > 0;
-    private bool IsDrawingTool => tool is RegionEditorTool.Rectangle or RegionEditorTool.Ellipse or RegionEditorTool.Polygon;
+    private bool IsDrawingTool => tool is RegionEditorTool.Rectangle or RegionEditorTool.Ellipse or RegionEditorTool.Polygon
+        or RegionEditorTool.Brush or RegionEditorTool.Eraser;
+
+    /// <summary>Explicitly start an independent brush region instead of adding to the selected one.</summary>
+    public void BeginNewBrushRegion()
+    {
+        if (!canEdit) return;
+        CancelPendingOperation();
+        SelectRegion(null);
+        Tool = RegionEditorTool.Brush;
+    }
 
     public Point ImageToViewport(Point point) => new(point.X * zoom + offset.X, point.Y * zoom + offset.Y);
     public Point ImageToViewport(AtlasPoint point) => ImageToViewport(new Point(point.X, point.Y));
@@ -175,6 +210,7 @@ public sealed class RegionEditorSurface : FrameworkElement
     {
         if (!HasImage || !IsFinite(viewport)) return;
         if (gesture != Gesture.None) CancelPendingOperation();
+        pointerViewport = viewport;
         var pixel = ViewportToImage(viewport);
         startViewport = viewport;
         startPixel = ClampToImage(pixel);
@@ -208,6 +244,20 @@ public sealed class RegionEditorSurface : FrameworkElement
             InvalidateVisual();
             return;
         }
+        if (tool is RegionEditorTool.Brush or RegionEditorTool.Eraser)
+        {
+            if (!InsideImage(pixel)) return;
+            original = regions.FirstOrDefault(region => region.Id == selectedRegionId);
+            strokeErases = tool == RegionEditorTool.Eraser;
+            if (strokeErases && original is null) return;
+            strokeRadius = brushRadius;
+            lastStrokePoint = new AtlasPoint(pixel.X, pixel.Y);
+            gesture = Gesture.Stroke;
+            if (!TryApplyStroke(original?.Geometry, [lastStrokePoint])) return;
+            PendingOperationChanged?.Invoke(this, EventArgs.Empty);
+            InvalidateVisual();
+            return;
+        }
         var selected = regions.FirstOrDefault(region => region.Id == selectedRegionId);
         handleIndex = selected is null ? -1 : HitHandle(selected.Geometry, viewport);
         var hit = handleIndex >= 0 ? selected : regions.Reverse().FirstOrDefault(region => HitRegion(region.Geometry, pixel));
@@ -224,6 +274,7 @@ public sealed class RegionEditorSurface : FrameworkElement
     public void PointerMove(Point viewport)
     {
         if (!HasImage || !IsFinite(viewport)) return;
+        pointerViewport = viewport;
         var pixel = ClampToImage(ViewportToImage(viewport));
         switch (gesture)
         {
@@ -239,6 +290,18 @@ public sealed class RegionEditorSurface : FrameworkElement
                 break;
             case Gesture.Handle when original is not null:
                 preview = Resize(original.Geometry, handleIndex, pixel);
+                break;
+            case Gesture.Stroke:
+                var sourcePixel = ViewportToImage(viewport);
+                var next = new AtlasPoint(sourcePixel.X, sourcePixel.Y);
+                if (next != lastStrokePoint)
+                {
+                    // Boolean operations consume complete capsules between input samples, so a fast
+                    // pointer never leaves gaps. Only the new stroke is clipped to image bounds.
+                    if (!strokeErases || preview is not null)
+                        if (!TryApplyStroke(preview, [lastStrokePoint, next])) return;
+                    lastStrokePoint = next;
+                }
                 break;
             case Gesture.None when polygon.Count > 0:
                 polygonHover = pixel;
@@ -260,6 +323,15 @@ public sealed class RegionEditorSurface : FrameworkElement
         else if (completedGesture is Gesture.Move or Gesture.Handle && completed is not null && previous is not null
             && !SameGeometry(completed, previous.Geometry))
             Commit(previous with { Geometry = completed }, RegionEditOperation.Update);
+        else if (completedGesture == Gesture.Stroke)
+        {
+            if (previous is null && completed is not null)
+                Commit(new AtlasRegion(Guid.NewGuid(), completed), RegionEditOperation.Create);
+            else if (previous is not null && completed is null)
+                RemoveRegion(previous.Id);
+            else if (previous is not null && completed is not null && !SameGeometry(completed, previous.Geometry))
+                Commit(previous with { Geometry = completed }, RegionEditOperation.Update);
+        }
         InvalidateVisual();
     }
 
@@ -289,11 +361,7 @@ public sealed class RegionEditorSurface : FrameworkElement
     {
         if (!canEdit || selectedRegionId is null || !regions.Any(region => region.Id == selectedRegionId)) return false;
         CancelPendingOperation();
-        var id = selectedRegionId;
-        regions = new ReadOnlyCollection<AtlasRegion>(regions.Where(region => region.Id != id).ToArray());
-        SelectRegion(null);
-        RegionsChanged?.Invoke(this, new RegionsChangedEventArgs(regions, selectedRegionId, RegionEditOperation.Delete));
-        InvalidateVisual();
+        RemoveRegion(selectedRegionId.Value);
         return true;
     }
 
@@ -314,7 +382,7 @@ public sealed class RegionEditorSurface : FrameworkElement
         context.DrawImage(image, new Rect(0, 0, ImageWidth, ImageHeight));
         foreach (var region in regions)
         {
-            if (original?.Id == region.Id && preview is not null) continue;
+            if (original?.Id == region.Id && (preview is not null || gesture == Gesture.Stroke)) continue;
             var selected = region.Id == selectedRegionId;
             DrawRegion(context, region.Geometry, selected ? SelectedFill : RegionFill, selected ? SelectedStroke : RegionStroke);
         }
@@ -342,6 +410,13 @@ public sealed class RegionEditorSurface : FrameworkElement
                     context.DrawRectangle(Brushes.White, new Pen(SelectedStroke, 1.5),
                         new Rect(viewport.X - 4, viewport.Y - 4, 8, 8));
                 }
+        }
+        if (canEdit && tool is (RegionEditorTool.Brush or RegionEditorTool.Eraser) && pointerViewport is { } cursorPoint)
+        {
+            var radius = (gesture == Gesture.Stroke ? strokeRadius : brushRadius) * zoom;
+            context.DrawEllipse(null, new Pen(Brushes.Black, 3), cursorPoint, radius, radius);
+            context.DrawEllipse(null, new Pen(tool == RegionEditorTool.Eraser ? Brushes.White : PreviewStroke, 1),
+                cursorPoint, radius, radius);
         }
         context.Pop();
     }
@@ -374,6 +449,11 @@ public sealed class RegionEditorSurface : FrameworkElement
         if (IsMouseCaptured) ReleaseMouseCapture();
         e.Handled = true;
     }
+    protected override void OnMouseLeave(MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (!IsMouseCaptured) { pointerViewport = null; InvalidateVisual(); }
+    }
     protected override void OnLostMouseCapture(MouseEventArgs e)
     {
         base.OnLostMouseCapture(e);
@@ -402,6 +482,33 @@ public sealed class RegionEditorSurface : FrameworkElement
         SelectRegion(changed.Id);
         RegionsChanged?.Invoke(this, new RegionsChangedEventArgs(regions, selectedRegionId, operation));
         InvalidateVisual();
+    }
+
+    private void RemoveRegion(Guid id)
+    {
+        regions = new ReadOnlyCollection<AtlasRegion>(regions.Where(region => region.Id != id).ToArray());
+        if (selectedRegionId == id) SelectRegion(null);
+        RegionsChanged?.Invoke(this, new RegionsChangedEventArgs(regions, selectedRegionId, RegionEditOperation.Delete));
+        InvalidateVisual();
+    }
+
+    private bool TryApplyStroke(RegionGeometry? source, IReadOnlyList<AtlasPoint> points)
+    {
+        try
+        {
+            preview = RegionGeometryOperations.ApplyStroke(source, points, strokeRadius, ImageWidth, ImageHeight, strokeErases);
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            // A rejected operation must discard the whole live stroke, including earlier pointer
+            // samples, rather than accidentally committing a partially changed region.
+            CancelPendingOperation();
+            OperationFailed?.Invoke(this, new RegionEditFailedEventArgs(UiLanguage.T(
+                "Мазок отменён: превышена допустимая сложность области или диапазон координат. Попробуйте меньший радиус или более простое изменение.",
+                "Stroke cancelled: the region complexity or coordinate range exceeds the supported limit. Try a smaller radius or a simpler edit.")));
+            return false;
+        }
     }
 
     private void ResetGesture(bool notify = true)
@@ -435,12 +542,7 @@ public sealed class RegionEditorSurface : FrameworkElement
             delta.X = Math.Clamp(delta.X, -bounds.Left, ImageWidth - bounds.Right);
         if (bounds.Top >= 0 && bounds.Bottom <= ImageHeight)
             delta.Y = Math.Clamp(delta.Y, -bounds.Top, ImageHeight - bounds.Bottom);
-        return geometry.Kind switch
-        {
-            "rectangle" => RegionGeometry.Rectangle(geometry.X + delta.X, geometry.Y + delta.Y, geometry.Width, geometry.Height),
-            "ellipse" => RegionGeometry.Ellipse(geometry.X + delta.X, geometry.Y + delta.Y, geometry.Width, geometry.Height),
-            _ => RegionGeometry.Polygon(geometry.Points.Select(point => new AtlasPoint(point.X + delta.X, point.Y + delta.Y)))
-        };
+        return RegionGeometryOperations.Translate(geometry, delta.X, delta.Y);
     }
 
     private static RegionGeometry? RectangleOrEllipse(Point first, Point second, bool ellipse)
@@ -455,6 +557,7 @@ public sealed class RegionEditorSurface : FrameworkElement
 
     private static RegionGeometry Resize(RegionGeometry geometry, int handle, Point point)
     {
+        if (geometry.Kind == "compound") return geometry;
         if (geometry.Kind == "polygon")
         {
             var points = geometry.Points.ToArray();
@@ -481,16 +584,17 @@ public sealed class RegionEditorSurface : FrameworkElement
         return shape.FillContains(point) || shape.StrokeContains(new Pen(Brushes.White, 10 / zoom), point);
     }
 
-    private static IReadOnlyList<Point> Handles(RegionGeometry geometry) => geometry.Kind == "polygon"
-        ? geometry.Points.Select(ToPoint).ToArray()
-        : [new(geometry.X, geometry.Y), new(geometry.X + geometry.Width, geometry.Y),
-            new(geometry.X + geometry.Width, geometry.Y + geometry.Height), new(geometry.X, geometry.Y + geometry.Height)];
+    private static IReadOnlyList<Point> Handles(RegionGeometry geometry) => geometry.Kind switch
+    {
+        "compound" => Array.Empty<Point>(),
+        "polygon" => geometry.Points.Select(ToPoint).ToArray(),
+        _ => [new(geometry.X, geometry.Y), new(geometry.X + geometry.Width, geometry.Y),
+            new(geometry.X + geometry.Width, geometry.Y + geometry.Height), new(geometry.X, geometry.Y + geometry.Height)]
+    };
     private static Rect Bounds(RegionGeometry geometry)
     {
-        if (geometry.Kind != "polygon") return new Rect(geometry.X, geometry.Y, geometry.Width, geometry.Height);
-        var left = geometry.Points.Min(point => point.X);
-        var top = geometry.Points.Min(point => point.Y);
-        return new Rect(left, top, geometry.Points.Max(point => point.X) - left, geometry.Points.Max(point => point.Y) - top);
+        var bounds = RegionGeometryOperations.GetBounds(geometry);
+        return new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height);
     }
     private static Geometry ToDrawingGeometry(RegionGeometry geometry)
     {
@@ -499,17 +603,18 @@ public sealed class RegionEditorSurface : FrameworkElement
         var path = new StreamGeometry { FillRule = FillRule.EvenOdd };
         using (var builder = path.Open())
         {
-            builder.BeginFigure(ToPoint(geometry.Points[0]), true, true);
-            foreach (var point in geometry.Points.Skip(1)) builder.LineTo(ToPoint(point), true, false);
+            foreach (var ring in RegionGeometryCodec.ToRings(geometry))
+            {
+                builder.BeginFigure(ToPoint(ring[0]), true, true);
+                foreach (var point in ring.Skip(1)) builder.LineTo(ToPoint(point), true, false);
+            }
         }
         path.Freeze();
         return path;
     }
     private void DrawRegion(DrawingContext context, RegionGeometry geometry, Brush fillBrush, Brush stroke)
         => context.DrawGeometry(fillBrush, new Pen(stroke, 2 / zoom), ToDrawingGeometry(geometry));
-    private static bool SameGeometry(RegionGeometry first, RegionGeometry second) =>
-        first.Kind == second.Kind && first.X == second.X && first.Y == second.Y && first.Width == second.Width
-        && first.Height == second.Height && first.Points.SequenceEqual(second.Points);
+    private static bool SameGeometry(RegionGeometry first, RegionGeometry second) => first.Equals(second);
     private static bool HasArea(IReadOnlyList<AtlasPoint> points)
     {
         // Translate before the cross-products to avoid cancellation for small shapes far
