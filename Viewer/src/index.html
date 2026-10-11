@@ -15,34 +15,34 @@
       <img id="brand-logo" src="branding/LOGO2.png" alt="HISTOSETS" width="138" height="40">
       <h1 id="title">Просмотр изображения</h1>
     </div>
-    <div class="toolbar" aria-label="Управление изображением">
-      <button id="zoom-in" title="Приблизить" aria-label="Приблизить">+</button>
-      <button id="zoom-out" title="Отдалить" aria-label="Отдалить">−</button>
-      <button id="home">Целиком</button>
-      <label><input type="checkbox" id="overlays" checked> Контуры</label>
-      <label>Заливка <input id="opacity" type="range" min="0" max="70" value="20" aria-label="Прозрачность заливки"></label>
+    <div class="toolbar" aria-label="Управление изображением" data-aria-label-en="Image controls">
+      <button id="zoom-in" title="Приблизить" data-title-en="Zoom in" aria-label="Приблизить" data-aria-label-en="Zoom in">+</button>
+      <button id="zoom-out" title="Отдалить" data-title-en="Zoom out" aria-label="Отдалить" data-aria-label-en="Zoom out">−</button>
+      <button id="home" data-en="Fit image">Целиком</button>
+      <label><input type="checkbox" id="overlays" checked> <span data-en="Outlines">Контуры</span></label>
+      <label><span data-en="Fill">Заливка</span> <input id="opacity" type="range" min="0" max="70" value="20" aria-label="Прозрачность заливки" data-aria-label-en="Fill opacity"></label>
     </div>
   </header>
   <main>
-    <section id="stage" aria-label="Изображение препарата">
+    <section id="stage" aria-label="Изображение препарата" data-aria-label-en="Specimen image">
       <div id="viewer"></div>
       <div id="message" role="status">Загрузка изображения…</div>
     </section>
     <aside>
-      <h2>Элементы</h2>
-      <div id="elements" aria-label="Элементы препарата"></div>
+      <h2 data-en="Elements">Элементы</h2>
+      <div id="elements" aria-label="Элементы препарата" data-aria-label-en="Specimen elements"></div>
       <p id="selection" aria-live="polite">Выберите элемент для подсветки.</p>
       <div class="tools">
-        <h2>Пробная разметка</h2>
-        <label for="tool">Инструмент</label>
+        <h2 data-en="Trial annotations">Пробная разметка</h2>
+        <label for="tool" data-en="Tool">Инструмент</label>
         <select id="tool">
-          <option value="navigate">Просмотр</option>
-          <option value="rectangle">Прямоугольник</option>
-          <option value="polygon">Полигон</option>
+          <option value="navigate" data-en="Navigate">Просмотр</option>
+          <option value="rectangle" data-en="Rectangle">Прямоугольник</option>
+          <option value="polygon" data-en="Polygon">Полигон</option>
         </select>
         <p id="hint">Колесо мыши — масштаб. Перетаскивание — перемещение.</p>
-        <button id="reset">Восстановить исходные контуры</button>
-        <p class="note">Пробные изменения не сохраняются. Полный редактор появится в одном из следующих обновлений.</p>
+        <button id="reset" data-en="Restore original outlines">Восстановить исходные контуры</button>
+        <p class="note" data-en="Trial changes are not saved. A complete editor is planned for a future update.">Пробные изменения не сохраняются. Полный редактор появится в одном из следующих обновлений.</p>
       </div>
     </aside>
   </main>

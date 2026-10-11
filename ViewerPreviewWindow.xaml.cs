@@ -17,6 +17,7 @@ public partial class ViewerPreviewWindow : Window
     private bool closed;
     private bool ready;
     private string? pyramidHost;
+    private Func<string> statusText = () => UiLanguage.T("Загрузка просмотрщика…", "Loading viewer…");
 
     public ViewerPreviewWindow(AtlasSpecimen specimen, LoadedImage image, string dataDirectory)
     {
@@ -25,6 +26,25 @@ public partial class ViewerPreviewWindow : Window
         this.dataDirectory = dataDirectory;
         InitializeComponent();
         Title = "HISTOSETS — " + specimen.Name;
+        ApplyLanguage();
+        UiLanguage.Changed += LanguageChanged;
+    }
+
+    private void LanguageChanged(object? sender, EventArgs e) => ApplyLanguage();
+
+    private void ApplyLanguage()
+    {
+        DziButton.Content = UiLanguage.T("Открыть пирамиду DZI…", "Open DZI pyramid…");
+        PrototypeNotice.Text = UiLanguage.T("Прототип: пробная разметка хранится только до закрытия окна.",
+            "Prototype: trial annotations are kept only until this window is closed.");
+        ViewerStatus.Text = statusText();
+        if (ready && !closed) Send(new { type = "locale", locale = UiLanguage.Locale });
+    }
+
+    private void SetStatus(Func<string> text)
+    {
+        statusText = text;
+        ViewerStatus.Text = text();
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -33,7 +53,8 @@ public partial class ViewerPreviewWindow : Window
         {
             var viewerDirectory = Path.Combine(AppContext.BaseDirectory, "Viewer");
             if (!File.Exists(Path.Combine(viewerDirectory, "index.html")))
-                throw new FileNotFoundException("Не найдена папка Viewer. Распакуйте архив приложения целиком.");
+                throw new FileNotFoundException(UiLanguage.T("Не найдена папка Viewer. Распакуйте архив приложения целиком.",
+                    "The Viewer folder is missing. Extract the complete application archive."));
             var cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HISTOSETS", "WebView2");
             var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: cache);
             if (closed) return;
@@ -54,7 +75,8 @@ public partial class ViewerPreviewWindow : Window
             core.WebMessageReceived += MessageReceived;
             core.NavigationCompleted += (_, args) =>
             {
-                if (!args.IsSuccess && !closed) ViewerStatus.Text = "Не удалось загрузить просмотрщик: " + args.WebErrorStatus;
+                if (!args.IsSuccess && !closed)
+                    SetStatus(() => UiLanguage.T("Не удалось загрузить просмотрщик: ", "Could not load the viewer: ") + args.WebErrorStatus);
             };
             Browser.Source = new Uri($"https://{ViewerHost}/index.html");
         }
@@ -62,9 +84,10 @@ public partial class ViewerPreviewWindow : Window
         {
             if (closed) return;
             ErrorLog.Write(ex);
-            ViewerStatus.Text = ex is WebView2RuntimeNotFoundException
-                ? "Для нового просмотрщика установите Microsoft Edge WebView2 Runtime. Основное окно атласа доступно без него."
-                : "Не удалось запустить новый просмотрщик: " + ex.Message;
+            SetStatus(() => ex is WebView2RuntimeNotFoundException
+                ? UiLanguage.T("Для нового просмотрщика установите Microsoft Edge WebView2 Runtime. Основное окно атласа доступно без него.",
+                    "Install Microsoft Edge WebView2 Runtime to use the new viewer. The main atlas window remains available without it.")
+                : UiLanguage.T("Не удалось запустить новый просмотрщик: ", "Could not start the new viewer: ") + ex.Message);
         }
     }
 
@@ -79,6 +102,7 @@ public partial class ViewerPreviewWindow : Window
             {
                 ready = true;
                 DziButton.IsEnabled = true;
+                Send(new { type = "locale", locale = UiLanguage.Locale });
                 var relative = Path.GetRelativePath(Path.Combine(dataDirectory, "SPECIMENS"), specimen.ImagePath);
                 var url = "https://media.histosets.local/" + EncodePath(relative);
                 Send(new
@@ -96,13 +120,15 @@ public partial class ViewerPreviewWindow : Window
                     })
                 });
             }
-            else if (type == "loaded") ViewerStatus.Text = "Колесо мыши — масштаб. Перетаскивание — перемещение. Выберите элемент справа.";
-            else if (type == "error") ViewerStatus.Text = "Изображение недоступно. Проверьте файл и содержимое папки пирамиды.";
+            else if (type == "loaded") SetStatus(() => UiLanguage.T("Колесо мыши — масштаб. Перетаскивание — перемещение. Выберите элемент справа.",
+                "Use the mouse wheel to zoom and drag to pan. Select an element on the right."));
+            else if (type == "error") SetStatus(() => UiLanguage.T("Изображение недоступно. Проверьте файл и содержимое папки пирамиды.",
+                "The image is unavailable. Check the image file and the pyramid folder contents."));
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
         {
             ErrorLog.Write(ex);
-            ViewerStatus.Text = "Не удалось прочитать ответ просмотрщика.";
+            SetStatus(() => UiLanguage.T("Не удалось прочитать ответ просмотрщика.", "Could not read the viewer response."));
         }
     }
 
@@ -111,7 +137,8 @@ public partial class ViewerPreviewWindow : Window
 
     private void Dzi_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Title = "Открыть пирамиду изображения", Filter = "Deep Zoom Image (*.dzi)|*.dzi", CheckFileExists = true };
+        var dialog = new OpenFileDialog { Title = UiLanguage.T("Открыть пирамиду изображения", "Open image pyramid"),
+            Filter = "Deep Zoom Image (*.dzi)|*.dzi", CheckFileExists = true };
         if (dialog.ShowDialog(this) != true) return;
         try
         {
@@ -125,18 +152,20 @@ public partial class ViewerPreviewWindow : Window
                 tileSource = "https://" + pyramidHost + "/" + Uri.EscapeDataString(Path.GetFileName(dialog.FileName)),
                 elements = Array.Empty<object>()
             });
-            ViewerStatus.Text = "Открывается пирамида DZI. Исходные препараты доступны в основном окне.";
+            SetStatus(() => UiLanguage.T("Открывается пирамида DZI. Исходные препараты доступны в основном окне.",
+                "Opening the DZI pyramid. Original specimens are available in the main window."));
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
             ErrorLog.Write(ex);
-            ViewerStatus.Text = "Не удалось открыть пирамиду: " + ex.Message;
+            SetStatus(() => UiLanguage.T("Не удалось открыть пирамиду: ", "Could not open the pyramid: ") + ex.Message);
         }
     }
 
     private void Window_Closed(object? sender, EventArgs e)
     {
         closed = true;
+        UiLanguage.Changed -= LanguageChanged;
         Browser.Dispose();
     }
 }

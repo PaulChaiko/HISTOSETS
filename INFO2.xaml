@@ -2,6 +2,15 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Описание" Height="520" Width="820" MinWidth="400" MinHeight="300" WindowStartupLocation="CenterOwner">
-    <TextBox x:Name="Page" Margin="14" Padding="10" FontSize="16" IsReadOnly="True"
-             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+    <Grid Margin="14">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/></Grid.RowDefinitions>
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+            <TextBlock x:Name="FontSizeLabel" Text="Размер текста" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <Button x:Name="SmallerTextButton" Content="A−" Click="SmallerText_Click"/>
+            <TextBlock x:Name="FontSizeValue" Width="32" TextAlignment="Center" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <Button x:Name="LargerTextButton" Content="A+" Click="LargerText_Click"/>
+        </StackPanel>
+        <TextBox x:Name="Page" Grid.Row="1" Padding="10" FontSize="16" IsReadOnly="True"
+                 TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+    </Grid>
 </Window>

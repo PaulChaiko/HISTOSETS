@@ -12,7 +12,7 @@ public partial class App : Application
         DispatcherUnhandledException += OnUnhandledException;
         try
         {
-            MainWindow ??= new MainWindow();
+            MainWindow ??= new HomeWindow();
             MainWindow.Show();
         }
         catch (Exception ex)
@@ -30,8 +30,8 @@ public partial class App : Application
     private void ReportFatalError(Exception exception)
     {
         var log = ErrorLog.Write(exception);
-        MessageBox.Show("Не удалось продолжить работу HISTOSETS.\n\n" + exception.Message
-            + (log is null ? "" : "\n\nПодробности: " + log), "HISTOSETS", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(UiLanguage.T("Не удалось продолжить работу HISTOSETS.\n\n", "HISTOSETS could not continue.\n\n") + UiLanguage.Error(exception)
+            + (log is null ? "" : UiLanguage.T("\n\nПодробности: ", "\n\nDetails: ") + log), "HISTOSETS", MessageBoxButton.OK, MessageBoxImage.Error);
         Shutdown(1);
     }
 }

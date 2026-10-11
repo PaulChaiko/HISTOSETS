@@ -27,14 +27,14 @@ public sealed partial class CatalogStore
                 var snapshot = Path.Combine(stage, "catalog.sqlite");
                 using (var source = Open(DatabasePath))
                 {
-                    Validate(source);
+                    Validate(source, allowLegacy: true);
                     using var target = Open(snapshot, SqliteOpenMode.ReadWriteCreate);
                     source.BackupDatabase(target);
                 }
                 List<BackupFile> files;
                 using (var connection = Open(snapshot))
                 {
-                    Validate(connection);
+                    Validate(connection, allowLegacy: true);
                     files = ReferencedFiles(connection, RootDirectory);
                 }
                 files.Insert(0, new("catalog.sqlite", StorageFiles.Hash(snapshot), new FileInfo(snapshot).Length));
@@ -99,7 +99,7 @@ public sealed partial class CatalogStore
                     CopyVerified(input, output, file);
                 }
                 using var connection = Open(Path.Combine(stage, "catalog.sqlite"));
-                Validate(connection);
+                Validate(connection, allowLegacy: true);
                 var referenced = ReferencedFiles(connection, stage);
                 if (referenced.Count + 1 != manifest.Files.Count || referenced.Any(f => !manifest.Files.Contains(f)))
                     throw new CatalogStorageException("Файлы архива не соответствуют ссылкам в базе.");

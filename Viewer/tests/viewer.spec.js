@@ -102,3 +102,32 @@ test('a slow previous image cannot replace the latest selection', async ({ page,
   await expect.poll(async () => (await snapshot(page)).title).toBe(atlas[2].title);
   expect((await snapshot(page)).annotations.length).toBe(atlas[2].elements.flatMap(e => e.polygons).length);
 });
+
+test('host language changes preserve image, outlines, selection and drawing tool', async ({ page, request }) => {
+  await page.addInitScript(() => {
+    window.chrome ??= {};
+    window.chrome.webview = {
+      postMessage: () => {},
+      addEventListener: (type, handler) => { if (type === 'message') window.deliverHostMessage = handler; }
+    };
+  });
+  await page.reload();
+  await page.waitForFunction(() => window.histosetsPreview && window.deliverHostMessage);
+  const atlas = await (await request.get('/fixtures/atlas.json')).json();
+  await load(page, atlas.find(item => item.elements.length));
+  await page.locator('#elements button').first().click();
+  await page.locator('#tool').selectOption('rectangle');
+  const before = await snapshot(page);
+  await page.evaluate(() => window.deliverHostMessage({ data: { type: 'locale', locale: 'en' } }));
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(page.getByRole('button', { name: 'Zoom in', exact: true })).toBeEnabled();
+  await expect(page.locator('#hint')).toContainText('Click and drag');
+  await expect(page.locator('#status')).toContainText('pixels');
+  await expect(page.locator('.note')).toContainText('not saved');
+  await expect(page.locator('#tool')).toHaveValue('rectangle');
+  expect(await snapshot(page)).toEqual(before);
+  await page.evaluate(() => window.deliverHostMessage({ data: { type: 'locale', locale: 'ru' } }));
+  await expect(page.getByRole('button', { name: 'Приблизить', exact: true })).toBeEnabled();
+  await expect(page.locator('#hint')).toContainText('Нажмите и протяните');
+  expect(await snapshot(page)).toEqual(before);
+});
