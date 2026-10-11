@@ -50,7 +50,11 @@ internal static partial class Program
             setup.SelectMethods([TrainingMethod.NameObjectImage, TrainingMethod.TraceElement, TrainingMethod.NameObjectDescription]);
             setup.SetOrder(TrainingOrder.ByMethod);
             CompleteTrainingTask(setup, setup.BuildPlanAsync());
-            Check(setup.Plan?.QuestionCount == 3, "A mixed plan includes recognition, tracing and a dedicated object description");
+            var mixedPlan = setup.Plan ?? throw new Exception("Mixed training plan was not prepared");
+            var eligibilityDetails = string.Join("; ", mixedPlan.Eligibility.Select(item =>
+                $"{item.Method}: {item.QuestionCount} question(s), issues [{string.Join(", ", item.Issues.Select(issue => issue.Code))}]"));
+            Check(mixedPlan.QuestionCount == 3, "A mixed plan includes recognition, tracing and a dedicated object description"
+                + (mixedPlan.QuestionCount == 3 ? "" : $"; actual count {mixedPlan.QuestionCount}; {eligibilityDetails}"));
             RunSessionFromSetup(setup, session => CheckEnglishTraceSession(session, output));
 
             var catalog = store.CaptureTrainingCatalog(ImageLoader.ReadMetadata);
@@ -113,10 +117,15 @@ internal static partial class Program
                 element.Regions.Add(new() { MaterialImageId = image.Id, Geometry = RegionGeometry.Ellipse(260, 90, 65, 100) });
             }
             draft.Elements.Add(element);
-            var prompt = new TrainingPromptDraft();
-            prompt.Texts["ru"] = "Несколько округлых структур образуют повторяющийся рисунок.";
-            prompt.Texts["en"] = "Several rounded structures form a repeating pattern.";
-            draft.TrainingPrompts.Add(prompt);
+            if (i == 0)
+            {
+                // Only the mixed-session target needs this description. Giving it to distinct
+                // specimens would correctly make the recognition answer ambiguous.
+                var prompt = new TrainingPromptDraft();
+                prompt.Texts["ru"] = "Несколько округлых структур образуют повторяющийся рисунок.";
+                prompt.Texts["en"] = "Several rounded structures form a repeating pattern.";
+                draft.TrainingPrompts.Add(prompt);
+            }
             ids.Add(store.SaveMaterialDraft(draft, ImageLoader.ReadMetadata).Id);
         }
         return ids.ToArray();
@@ -140,6 +149,8 @@ internal static partial class Program
         var submitted = drawing.GetGeometries().Select(RegionGeometryCodec.Serialize).ToArray();
         Check(surface.ReferenceRegions.Count == 0 && ((Button)session.FindName("CheckAnswerButton")).IsEnabled,
             "A completed learner region enables comparison while the reference remains undisclosed");
+        Check(string.IsNullOrWhiteSpace(((TextBlock)session.FindName("OperationStatus")).Text),
+            "Completing a valid learner drawing clears the earlier unfinished-polygon validation message");
         SaveScreenshot(session, Path.Combine(output, "native-trace-drawing-ru.png"));
         CompleteSessionTask(session, session.CheckAnswerAsync());
         var first = state.CurrentResult ?? throw new Exception("Trace check produced no result");

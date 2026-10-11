@@ -29,6 +29,7 @@ public partial class TrainingSessionWindow : Window
     private bool updating;
     private bool busy;
     private bool comparing;
+    private bool traceValidationMessage;
     private bool closed;
     private int generation;
     private Task? initializationTask;
@@ -55,7 +56,7 @@ public partial class TrainingSessionWindow : Window
         ReviewImageView.SetLocale(locale);
         TraceDrawingView.SetLocale(locale);
         ReviewDrawingView.SetLocale(locale);
-        TraceDrawingView.DrawingChanged += (_, _) => RefreshCommands();
+        TraceDrawingView.DrawingChanged += TraceDrawing_Changed;
         AnswerSelector.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler(Answer_TextChanged));
         initialized = true;
         Localize();
@@ -257,6 +258,7 @@ public partial class TrainingSessionWindow : Window
 
     private void ClearQuestionMedia()
     {
+        traceValidationMessage = false;
         currentTraceImage = null;
         TraceDrawingView.Clear();
         TraceDrawingView.Visibility = Visibility.Collapsed;
@@ -379,6 +381,17 @@ public partial class TrainingSessionWindow : Window
         return Task.CompletedTask;
     }
 
+    private void TraceDrawing_Changed(object? sender, EventArgs e)
+    {
+        if (traceValidationMessage && !busy && !closed && !Session.IsFinished && Session.CurrentResult is null
+            && Session.CurrentQuestion?.Method == TrainingMethod.TraceElement && !TraceDrawingView.IsReadOnly)
+        {
+            traceValidationMessage = false;
+            OperationStatus.Text = "";
+        }
+        RefreshCommands();
+    }
+
     /// <summary>Finish a valid polygon and compare one frozen drawn answer without blocking input rendering.</summary>
     public async Task<bool> SubmitTraceAsync()
     {
@@ -386,6 +399,7 @@ public partial class TrainingSessionWindow : Window
             || Session.CurrentQuestion?.Method != TrainingMethod.TraceElement || currentTraceImage is null) return false;
         if (!TraceDrawingView.TryFinishPendingDrawing())
         {
+            traceValidationMessage = true;
             OperationStatus.Text = T("Завершите текущую область: для полигона нужны как минимум три вершины. Незавершённый рисунок не отправлен.",
                 "Finish the current region: a polygon needs at least three vertices. The unfinished drawing has not been submitted.");
             RefreshCommands();
@@ -393,12 +407,14 @@ public partial class TrainingSessionWindow : Window
         }
         if (!TraceDrawingView.CanSubmit)
         {
+            traceValidationMessage = true;
             OperationStatus.Text = T("Нанесите хотя бы одну область, затем нажмите «Сравнить с эталоном».",
                 "Draw at least one region, then select Compare with reference.");
             RefreshCommands();
             return false;
         }
         var request = generation;
+        traceValidationMessage = false;
         comparing = true;
         SetBusy(true);
         TraceDrawingView.SetReadOnly();
@@ -412,6 +428,7 @@ public partial class TrainingSessionWindow : Window
         {
             if (!IsCurrent(request)) return false;
             TraceDrawingView.SetReadOnly(false);
+            traceValidationMessage = true;
             OperationStatus.Text = T("Не удалось сравнить области. Рисунок сохранён: проверьте контуры, упростите их или пропустите задание.",
                 "The regions could not be compared. Your drawing is kept: check or simplify its contours, or skip this question.");
             return false;
@@ -437,6 +454,7 @@ public partial class TrainingSessionWindow : Window
     private void RenderFeedback()
     {
         if (Session.CurrentResult is not { } result) return;
+        traceValidationMessage = false;
         if (result.Question.Method == TrainingMethod.TraceElement && currentTraceImage is not null)
         {
             TraceDrawingView.ShowComparison(currentTraceImage, result.Trace?.Regions ?? [], result.Question.Regions);
