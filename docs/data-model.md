@@ -43,7 +43,7 @@ SQLite используется в настольном приложении. Б
 
 ```mermaid
 erDiagram
-    analog_groups ||--o{ materials : groups
+    materials }o--o| analog_groups : belongs_to
     materials ||--o{ material_images : contains
     images ||--o{ material_images : referenced_by
     material_images ||--o| image_calibrations : calibrated_by
