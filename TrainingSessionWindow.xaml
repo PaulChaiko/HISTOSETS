@@ -30,6 +30,7 @@
                         <TextBlock x:Name="DescriptionText" FontSize="20" TextWrapping="Wrap" LineHeight="29"/>
                     </Border>
                     <controls:TrainingImageView x:Name="MainImageView" Height="355" Margin="0,0,0,14" Visibility="Collapsed"/>
+                    <controls:TrainingDrawingView x:Name="TraceDrawingView" Height="420" Margin="0,0,0,14" Visibility="Collapsed"/>
                     <UniformGrid x:Name="ImageChoicesPanel" Columns="2" Margin="0,0,0,10" Visibility="Collapsed"/>
                     <StackPanel x:Name="NamedAnswerPanel">
                         <TextBlock x:Name="AnswerLabel" FontWeight="SemiBold" Margin="0,0,0,6" TextWrapping="Wrap"/>
@@ -64,6 +65,7 @@
                         <TextBlock x:Name="ReviewDescriptionText" FontSize="19" TextWrapping="Wrap"/>
                     </Border>
                     <controls:TrainingImageView x:Name="ReviewImageView" Height="340" Visibility="Collapsed"/>
+                    <controls:TrainingDrawingView x:Name="ReviewDrawingView" Height="405" Visibility="Collapsed"/>
                     <UniformGrid x:Name="ReviewChoicesPanel" Columns="2" Visibility="Collapsed"/>
                     <TextBlock x:Name="ReviewStatus" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="#59545F"/>
                 </StackPanel>

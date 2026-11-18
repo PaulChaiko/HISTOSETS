@@ -108,6 +108,8 @@ public static class TrainingPlanner
                             { issues.Add(new(TrainingIssueCode.NoVisibleRegions, ElementId: element.Id, MaterialImageId: group.Key)); continue; }
                             if (method == TrainingMethod.TraceElement && extendsOutsideImage)
                             { issues.Add(new(TrainingIssueCode.RegionOutsideImage, ElementId: element.Id, MaterialImageId: group.Key)); continue; }
+                            if (method == TrainingMethod.TraceElement && !Comparable(regions))
+                            { issues.Add(new(TrainingIssueCode.RegionComparisonUnavailable, ElementId: element.Id, MaterialImageId: group.Key)); continue; }
                             questions.Add(new(Key(method, id, element.Id, group.Key), method, id, answer,
                                 element.Id, group.Key, regions: regions));
                         }
@@ -184,6 +186,16 @@ public static class TrainingPlanner
     {
         var normalized = Normalize(answer);
         return normalized.Length > 0 && (" " + text + " ").Contains(" " + normalized + " ", StringComparison.Ordinal);
+    }
+
+    private static bool Comparable(IReadOnlyList<TrainingRegion> regions)
+    {
+        try
+        {
+            _ = RegionComparison.Compare(regions.Select(region => region.Geometry), []);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or OverflowException) { return false; }
     }
 
     private static bool Visible(IReadOnlyList<TrainingRegion> regions, TrainingImage image, out bool extendsOutsideImage)
