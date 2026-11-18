@@ -24,7 +24,8 @@ jobs:
       - run: dotnet run --project tests/HistOSets.Storage.Tests -c Release -- .
   viewer:
     name: Viewer and tiled images
-    runs-on: ubuntu-latest
+    # Playwright 1.58 supports Ubuntu 24.04, but not the newer default runner.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
