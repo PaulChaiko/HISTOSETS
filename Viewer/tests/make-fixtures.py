@@ -1,7 +1,6 @@
 """Read unchanged atlas assets; create a clearly synthetic 201 MP tile pyramid."""
 import json
 import math
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import quote
 from PIL import Image, ImageDraw
@@ -10,21 +9,20 @@ root = Path(__file__).resolve().parents[2]
 out = root / 'artifacts' / 'viewer-fixtures'
 out.mkdir(parents=True, exist_ok=True)
 records = []
-for specimen in ET.parse(root / 'ATLAS' / 'ATLAS.xml').getroot().findall('Specimen'):
-    filename = specimen.attrib['IMAGE']
-    with Image.open(root / 'SPECIMENS' / filename) as image:
-        dpi = image.info.get('dpi', (96, 96))
-        sx, sy = [(value if value and math.isfinite(value) and value > 0 else 96) / 96 for value in dpi]
-        width, height = image.size
-    records.append(dict(
-        title=specimen.attrib['NAME'],
-        tileSource=dict(type='image', url='/specimens/' + quote(filename)),
-        width=width, height=height,
-        elements=[dict(id=f'element-{i}', name=element.attrib['NAME'],
-                       polygons=[[[float(p.split(',')[0]) * sx, float(p.split(',')[1]) * sy]
-                                  for p in polygon.attrib['POINTS'].split()]
-                                 for polygon in element.findall('POLYGON')])
-                  for i, element in enumerate(specimen.findall('ELEMENT'))]))
+seed = json.loads((root / 'tools' / 'HistOSets.Demo' / 'catalog-seed.json').read_text(encoding='utf8'))
+for locale in ('en', 'ru'):
+    for card in seed:
+        filename = card['File']
+        with Image.open(root / 'SPECIMENS' / filename) as image:
+            width, height = image.size
+        assert (width, height) == (card['Metadata']['Width'], card['Metadata']['Height'])
+        records.append(dict(
+            title=card['Texts'][locale]['Name'],
+            tileSource=dict(type='image', url='/specimens/' + quote(filename)),
+            width=width, height=height,
+            elements=[dict(id=f'element-{i}', name=element['Texts'][locale]['Name'],
+                           polygons=element['Polygons'])
+                      for i, element in enumerate(card['Elements'])]))
 (out / 'atlas.json').write_text(json.dumps(records, ensure_ascii=False), encoding='utf8')
 
 width, height, size = 16384, 12288, 256
