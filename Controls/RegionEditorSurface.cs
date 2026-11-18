@@ -31,6 +31,7 @@ public sealed class RegionEditFailedEventArgs(string message) : EventArgs
 /// </summary>
 public sealed class RegionEditorSurface : FrameworkElement
 {
+    private const double MaximumZoom = 64;
     private enum Gesture { None, Pan, Draw, Move, Handle, Stroke }
     private BitmapSource? image;
     private double imageWidth, imageHeight;
@@ -48,6 +49,8 @@ public sealed class RegionEditorSurface : FrameworkElement
     private Gesture gesture;
     private Point startViewport, startPixel;
     private Vector startOffset;
+    private Point? panPointerStart;
+    private Vector panStartOffset;
     private AtlasRegion? original;
     private RegionGeometry? preview;
     private int handleIndex = -1;
@@ -210,11 +213,10 @@ public sealed class RegionEditorSurface : FrameworkElement
 
     public void FitToView()
     {
+        if (gesture != Gesture.None || panPointerStart is not null) return;
         fit = true;
         if (!HasImage || ActualWidth <= 0 || ActualHeight <= 0) { InvalidateVisual(); return; }
-        var availableWidth = Math.Max(1, ActualWidth - 24);
-        var availableHeight = Math.Max(1, ActualHeight - 24);
-        zoom = Math.Clamp(Math.Min(availableWidth / ImageWidth, availableHeight / ImageHeight), 0.00001, 64);
+        zoom = FitZoom();
         offset = new Vector((ActualWidth - ImageWidth * zoom) / 2, (ActualHeight - ImageHeight * zoom) / 2);
         ZoomChanged?.Invoke(this, EventArgs.Empty);
         InvalidateVisual();
@@ -239,7 +241,7 @@ public sealed class RegionEditorSurface : FrameworkElement
     /// <summary>Shared pointer entry points for mouse and other pointing devices.</summary>
     public void PointerDown(Point viewport, int clickCount = 1)
     {
-        if (!HasImage || !IsFinite(viewport)) return;
+        if (!HasImage || !IsFinite(viewport) || panPointerStart is not null) return;
         if (gesture != Gesture.None) CancelPendingOperation();
         pointerViewport = viewport;
         var pixel = ViewportToImage(viewport);
@@ -306,6 +308,16 @@ public sealed class RegionEditorSurface : FrameworkElement
     {
         if (!HasImage || !IsFinite(viewport)) return;
         pointerViewport = viewport;
+        // Right-button navigation may temporarily suspend a drawing drag. Keep the
+        // source pixel under the pointer fixed so continuing the gesture adds no jump.
+        if (panPointerStart is { } panStart)
+        {
+            offset = panStartOffset + (viewport - panStart);
+            if (viewport != panStart) fit = false;
+            if (polygon.Count > 0) polygonHover = ClampToImage(ViewportToImage(viewport));
+            InvalidateVisual();
+            return;
+        }
         var pixel = ClampToImage(ViewportToImage(viewport));
         switch (gesture)
         {
@@ -338,6 +350,31 @@ public sealed class RegionEditorSurface : FrameworkElement
                 polygonHover = pixel;
                 break;
         }
+        InvalidateVisual();
+    }
+
+    public bool BeginPointerPan(Point viewport)
+    {
+        if (!HasImage || !IsFinite(viewport) || panPointerStart is not null) return false;
+        PointerMove(viewport);
+        panPointerStart = viewport;
+        panStartOffset = offset;
+        UpdateCursor();
+        InvalidateVisual();
+        return true;
+    }
+
+    public void EndPointerPan(Point viewport)
+    {
+        if (panPointerStart is null) return;
+        PointerMove(viewport);
+        panPointerStart = null;
+        if (gesture == Gesture.Pan && IsFinite(viewport))
+        {
+            startViewport = viewport;
+            startOffset = offset;
+        }
+        UpdateCursor();
         InvalidateVisual();
     }
 
@@ -382,6 +419,7 @@ public sealed class RegionEditorSurface : FrameworkElement
         var pending = HasPendingOperation;
         polygon.Clear();
         polygonHover = null;
+        panPointerStart = null;
         ResetGesture(false);
         if (IsMouseCaptured) ReleaseMouseCapture();
         if (pending) PendingOperationChanged?.Invoke(this, EventArgs.Empty);
@@ -446,7 +484,8 @@ public sealed class RegionEditorSurface : FrameworkElement
                         new Rect(viewport.X - 4, viewport.Y - 4, 8, 8));
                 }
         }
-        if (canEdit && tool is (RegionEditorTool.Brush or RegionEditorTool.Eraser) && pointerViewport is { } cursorPoint)
+        if (canEdit && panPointerStart is null && tool is (RegionEditorTool.Brush or RegionEditorTool.Eraser)
+            && pointerViewport is { } cursorPoint)
         {
             var radius = (gesture == Gesture.Stroke ? strokeRadius : brushRadius) * zoom;
             context.DrawEllipse(null, new Pen(Brushes.Black, 3), cursorPoint, radius, radius);
@@ -475,13 +514,30 @@ public sealed class RegionEditorSurface : FrameworkElement
     {
         base.OnMouseMove(e);
         PointerMove(e.GetPosition(this));
-        if (gesture != Gesture.None || polygon.Count > 0) e.Handled = true;
+        if (gesture != Gesture.None || panPointerStart is not null || polygon.Count > 0) e.Handled = true;
     }
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
         PointerUp(e.GetPosition(this));
-        if (IsMouseCaptured) ReleaseMouseCapture();
+        if (IsMouseCaptured && panPointerStart is null) ReleaseMouseCapture();
+        e.Handled = true;
+    }
+    protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonDown(e);
+        if (!HasImage) return;
+        Focus();
+        var viewport = e.GetPosition(this);
+        if (BeginPointerPan(viewport) && !IsMouseCaptured && !CaptureMouse()) EndPointerPan(viewport);
+        e.Handled = true;
+    }
+    protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonUp(e);
+        if (panPointerStart is null) return;
+        EndPointerPan(e.GetPosition(this));
+        if (IsMouseCaptured && gesture == Gesture.None) ReleaseMouseCapture();
         e.Handled = true;
     }
     protected override void OnMouseLeave(MouseEventArgs e)
@@ -493,6 +549,13 @@ public sealed class RegionEditorSurface : FrameworkElement
     {
         base.OnLostMouseCapture(e);
         if (gesture != Gesture.None) CancelPendingOperation();
+        else if (panPointerStart is not null)
+        {
+            panPointerStart = null;
+            pointerViewport = null;
+            UpdateCursor();
+            InvalidateVisual();
+        }
     }
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
@@ -559,14 +622,21 @@ public sealed class RegionEditorSurface : FrameworkElement
 
     private void SetZoom(double value, Point anchor)
     {
-        if (!HasImage || !double.IsFinite(value) || gesture != Gesture.None) return;
+        if (!HasImage || !double.IsFinite(value) || gesture != Gesture.None || panPointerStart is not null) return;
+        // Keep the full-image fit as the zoom-out stop. Small source images can also
+        // be viewed at 100% even if fitting would make them larger than that.
+        var minimum = Math.Min(1, FitZoom());
+        if (value <= minimum && minimum < 1) { FitToView(); return; }
         var pixel = ViewportToImage(anchor);
-        zoom = Math.Clamp(value, 0.00001, 64);
+        zoom = Math.Clamp(value, minimum, MaximumZoom);
         offset = new Vector(anchor.X - pixel.X * zoom, anchor.Y - pixel.Y * zoom);
         fit = false;
         ZoomChanged?.Invoke(this, EventArgs.Empty);
         InvalidateVisual();
     }
+
+    private double FitZoom() => Math.Min(MaximumZoom, Math.Min(
+        Math.Max(1, ActualWidth - 24) / ImageWidth, Math.Max(1, ActualHeight - 24) / ImageHeight));
 
     private RegionGeometry Translate(RegionGeometry geometry, Vector delta)
     {
@@ -667,7 +737,8 @@ public sealed class RegionEditorSurface : FrameworkElement
     private static double ValidDimension(double value) => double.IsFinite(value) && value > 0 ? value : 0;
     private static double Distance(AtlasPoint first, AtlasPoint second) => (ToPoint(first) - ToPoint(second)).Length;
     private static Point ToPoint(AtlasPoint point) => new(point.X, point.Y);
-    private void UpdateCursor() => Cursor = tool == RegionEditorTool.Pan || !canEdit ? Cursors.Hand : IsDrawingTool ? Cursors.Cross : Cursors.Arrow;
+    private void UpdateCursor() => Cursor = panPointerStart is not null || gesture == Gesture.Pan ? Cursors.ScrollAll
+        : tool == RegionEditorTool.Pan || !canEdit ? Cursors.Hand : IsDrawingTool ? Cursors.Cross : Cursors.Arrow;
     private void LanguageChanged(object? sender, EventArgs e) => InvalidateVisual();
     private static Brush FrozenBrush(Color color) { var brush = new SolidColorBrush(color); brush.Freeze(); return brush; }
 }

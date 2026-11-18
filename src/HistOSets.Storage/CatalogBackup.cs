@@ -17,57 +17,26 @@ public sealed partial class CatalogStore
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            destination = Path.GetFullPath(destination);
-            if (File.Exists(destination)) throw new CatalogStorageException("Файл уже существует. Выберите новое имя резервной копии.");
-            var stage = Path.Combine(Path.GetTempPath(), "histosets-backup-" + Guid.NewGuid().ToString("N"));
-            var temporaryZip = destination + ".partial-" + Guid.NewGuid().ToString("N");
-            Directory.CreateDirectory(stage);
-            try
-            {
-                var snapshot = Path.Combine(stage, "catalog.sqlite");
-                using (var source = Open(DatabasePath))
-                {
-                    Validate(source, allowLegacy: true);
-                    using var target = Open(snapshot, SqliteOpenMode.ReadWriteCreate);
-                    source.BackupDatabase(target);
-                }
-                List<BackupFile> files;
-                using (var connection = Open(snapshot))
-                {
-                    Validate(connection, allowLegacy: true);
-                    files = ReferencedFiles(connection, RootDirectory);
-                }
-                files.Insert(0, new("catalog.sqlite", StorageFiles.Hash(snapshot), new FileInfo(snapshot).Length));
-                using (var archive = ZipFile.Open(temporaryZip, ZipArchiveMode.Create))
-                {
-                    foreach (var file in files)
-                    {
-                        var path = file.Path == "catalog.sqlite" ? snapshot : StorageFiles.Resolve(RootDirectory, file.Path);
-                        using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                        using var output = archive.CreateEntry(file.Path, CompressionLevel.Fastest).Open();
-                        CopyVerified(input, output, file);
-                    }
-                    using var manifest = archive.CreateEntry("manifest.json").Open();
-                    JsonSerializer.Serialize(manifest, new BackupManifest(1, StorageFiles.UtcNow(), files));
-                }
-                File.Move(temporaryZip, destination);
-            }
-            finally
-            {
-                Directory.Delete(stage, true);
-                if (File.Exists(temporaryZip)) File.Delete(temporaryZip);
-            }
+            CopyCatalog(DatabasePath, destination);
         }
     }
 
-    /// <summary>Restore into a new or empty directory. The current catalog is never replaced.</summary>
-    public static void RestoreBackup(string archivePath, string targetDirectory)
+    public static void CopyCatalog(string sourcePath, string destination)
     {
-        targetDirectory = Path.GetFullPath(targetDirectory);
-        RequireEmpty(targetDirectory);
-        var parent = Path.GetDirectoryName(targetDirectory) ?? throw new CatalogStorageException("Выберите отдельную папку каталога.");
-        var stage = Path.Combine(parent, ".histosets-restore-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(stage);
+        PublishFile(destination, partial =>
+        {
+            using (var source = Open(Path.GetFullPath(sourcePath)))
+            using (var target = Open(partial, SqliteOpenMode.ReadWriteCreate))
+                source.BackupDatabase(target);
+            using var snapshot = Open(partial, SqliteOpenMode.ReadWrite);
+            Execute(snapshot, "PRAGMA journal_mode=DELETE;");
+            Validate(snapshot, deep: true);
+            VerifyImageContents(snapshot, hash: true);
+        });
+    }
+
+    private static void ExtractLegacyBackup(string archivePath, string stage)
+    {
         try
         {
             using (var archive = ZipFile.OpenRead(archivePath))
@@ -90,6 +59,8 @@ public sealed partial class CatalogStore
                 {
                     if (file.Path != "catalog.sqlite" && !file.Path.StartsWith("SPECIMENS/", StringComparison.Ordinal) && !file.Path.StartsWith("SOURCES/", StringComparison.Ordinal))
                         throw new CatalogStorageException("Неизвестный тип файла в архиве: " + file.Path);
+                    // XML is obsolete and not required to recover an already imported catalog.
+                    if (file.Path.StartsWith("SOURCES/", StringComparison.Ordinal)) continue;
                     var path = StorageFiles.Resolve(stage, file.Path);
                     var entry = archive.GetEntry(file.Path) ?? throw new CatalogStorageException("В архиве отсутствует файл: " + file.Path);
                     if (entry.Length != file.Size) throw new CatalogStorageException("Неверный размер файла: " + file.Path);
@@ -98,51 +69,12 @@ public sealed partial class CatalogStore
                     using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                     CopyVerified(input, output, file);
                 }
-                using var connection = Open(Path.Combine(stage, "catalog.sqlite"));
-                Validate(connection, allowLegacy: true);
-                var referenced = ReferencedFiles(connection, stage);
-                if (referenced.Count + 1 != manifest.Files.Count || referenced.Any(f => !manifest.Files.Contains(f)))
-                    throw new CatalogStorageException("Файлы архива не соответствуют ссылкам в базе.");
             }
-            RequireEmpty(targetDirectory);
-            if (Directory.Exists(targetDirectory)) Directory.Delete(targetDirectory, recursive: false);
-            Directory.Move(stage, targetDirectory);
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException or SqliteException)
         {
-            throw new CatalogStorageException("Резервная копия повреждена или имеет неподдерживаемый формат. Текущий каталог не изменён.", ex);
+            throw new CatalogStorageException("Старый архив повреждён или имеет неподдерживаемый формат.", ex);
         }
-        finally { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
-    }
-
-    private static void RequireEmpty(string path)
-    {
-        if (File.Exists(path) || (Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any()))
-            throw new CatalogStorageException("Для восстановления нужна новая или пустая папка. Существующий каталог остаётся на месте.");
-        if (Directory.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-            throw new CatalogStorageException("Выберите обычную папку, а не ссылку или соединение каталогов.");
-    }
-
-    private static List<BackupFile> ReferencedFiles(SqliteConnection connection, string root)
-    {
-        var result = new List<BackupFile>();
-        using var command = Command(connection, """
-            SELECT storage_key, sha256, byte_size FROM images
-            UNION ALL SELECT source_key, xml_sha256, NULL FROM import_batches;
-            """);
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
-        {
-            var key = reader.GetString(0);
-            if (!key.StartsWith("SPECIMENS/", StringComparison.Ordinal) && !key.StartsWith("SOURCES/", StringComparison.Ordinal))
-                throw new CatalogStorageException("Неизвестный путь файла в базе.");
-            var path = StorageFiles.Resolve(root, key);
-            var hash = reader.GetString(1);
-            if (!File.Exists(path) || StorageFiles.Hash(path) != hash || (!reader.IsDBNull(2) && new FileInfo(path).Length != reader.GetInt64(2)))
-                throw new CatalogStorageException("Отсутствует или повреждён файл: " + key);
-            result.Add(new(key, hash, new FileInfo(path).Length));
-        }
-        return result;
     }
 
     private static void CopyVerified(Stream input, Stream output, BackupFile file)

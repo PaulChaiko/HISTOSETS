@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Windows.Media.Imaging;
 using HistOSets.Core;
+using HistOSets.Storage;
+using Microsoft.Data.Sqlite;
 
 namespace HistOSets.Services;
 
@@ -36,10 +38,10 @@ public static class TrainingImageLoader
 {
     public const int MaximumPreviewDimension = 4096;
 
-    public static LoadedImage Load(TrainingImage image)
+    public static LoadedImage Load(TrainingImage image, Func<Guid, Stream> openImage)
     {
         ArgumentNullException.ThrowIfNull(image);
-        if (!image.IsUsable || string.IsNullOrWhiteSpace(image.ImagePath))
+        if (!image.IsUsable)
             throw new TrainingImageLoadException(TrainingImageError.Unavailable);
         if (image.Width <= 0 || image.Height <= 0 || image.Sha256 is not { Length: 64 } ||
             !image.Sha256.All(Uri.IsHexDigit))
@@ -47,10 +49,7 @@ public static class TrainingImageLoader
 
         try
         {
-            // Deny replacement/writes on Windows for the entire verification and decode. Never
-            // reopen the path: the preview and both hashes must refer to this exact file handle.
-            using var source = new FileStream(image.ImagePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                bufferSize: 64 * 1024, FileOptions.SequentialScan);
+            using var source = openImage(image.ImageId);
             var length = source.Length;
             var before = SHA256.HashData(source);
             if (!string.Equals(Convert.ToHexString(before), image.Sha256, StringComparison.OrdinalIgnoreCase))
@@ -90,7 +89,7 @@ public static class TrainingImageLoader
                 throw new TrainingImageLoadException(TrainingImageError.Changed);
             return new(preview, image.Width, image.Height, dpiX, dpiY);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or CatalogStorageException or SqliteException)
         {
             throw new TrainingImageLoadException(TrainingImageError.Unavailable);
         }

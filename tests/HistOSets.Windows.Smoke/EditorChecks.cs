@@ -17,9 +17,20 @@ internal static partial class Program
         InModal<EditorCatalogWindow>(home, "EditButton", chooser =>
         {
             SaveScreenshot(chooser, System.IO.Path.Combine(output, "native-editor-empty-catalog.png"));
+            InModal<TagsWindow>(chooser, "TagDictionaryButton", dictionary =>
+                Check(((ListBox)dictionary.FindName("GroupList")).Items.Count == 7,
+                    "The editor catalog gives access to the shared dictionary of six tag types"));
+            WaitEditorCatalog(chooser);
+            InModal<AnalogGroupsWindow>(chooser, "AnalogDictionaryButton", dictionary =>
+                Check(((Button)dictionary.FindName("NewGroupButton")).IsEnabled,
+                    "The editor catalog gives access to the shared analogue groups"));
+            WaitEditorCatalog(chooser);
             InModal<EditorWindow>(chooser, "NewButton", editor =>
             {
                 editor.AddImageFromPath(imagePath);
+                Check(editor.FindName("ImageList") is null && editor.FindName("PrimaryImageButton") is null
+                    && Equals(((Button)editor.FindName("AddImageButton")).Content, "Заменить изображение…"),
+                    "After the first image is added, the editor offers replacement without a separate primary image selector");
                 FillText(editor, "MaterialRu", "Проверочный объект", "Краткое описание на русском.", "Полное описание объекта на русском.");
                 var ready = (Button)editor.FindName("ReadyButton");
                 var previousStatus = ((TextBlock)editor.FindName("OperationStatus")).Text;
@@ -53,6 +64,8 @@ internal static partial class Program
                     && Near(ellipse.X, 500) && Near(ellipse.Y, 100) && Near(ellipse.Width, 300) && Near(ellipse.Height, 200),
                     "Drawing under different zoom levels retains original image pixel coordinates");
                 var beforeUndo = surface.Regions.ToDictionary(r => r.Id, r => RegionGeometryCodec.Serialize(r.Geometry));
+                editor.AddImageFromPath(imagePath);
+                Check(SameRegions(surface.Regions, beforeUndo), "Selecting the same image bytes again preserves all existing regions");
                 Click(editor, "UndoButton");
                 Check(surface.Regions.Count == 2, "Undo removes the last completed drawing operation");
                 Click(editor, "RedoButton");
@@ -101,9 +114,9 @@ internal static partial class Program
         return result ?? throw new Exception("Editor workflow did not produce an object");
     }
 
-    private static void CheckSavedEditorObject(string catalogRoot, string output, EditorResult expected)
+    private static void CheckSavedEditorObject(string catalogPath, string output, EditorResult expected)
     {
-        using var store = new CatalogStore(catalogRoot);
+        using var store = new CatalogStore(catalogPath);
         var draft = store.LoadMaterialDraft(expected.MaterialId);
         Check(draft.Status == "ready" && draft.Texts["ru"].Name == "Проверочный объект" && draft.Texts["en"].Name == "Smoke specimen"
             && draft.Texts["en"].Summary == "English object summary." && draft.Texts["ru"].Description == "Полное описание объекта на русском."
@@ -111,7 +124,7 @@ internal static partial class Program
             "Saved editor object retains ready status and complete bilingual content after catalog reopening");
         Check(draft.Images.Count == 1 && draft.Images[0].IsPrimary
             && SameRegions(draft.Elements.Single().Regions.Select(r => new AtlasRegion(r.Id, r.Geometry)), expected.Regions),
-            "Catalog reopening retains the primary image and exact persisted region geometry");
+            "The catalog file retains its object's single image and exact persisted region geometry");
         var viewer = new MainWindow(store);
         viewer.Show();
         Pump();

@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Globalization;
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -10,13 +9,15 @@ using System.Windows.Threading;
 using HistOSets.Controls;
 using HistOSets.Core;
 using HistOSets.Services;
+using HistOSets.Storage;
 
 namespace HistOSets;
 
 /// <summary>An in-memory recognition and drawing session with an immutable question language.</summary>
-public partial class TrainingSessionWindow : Window
+public partial class TrainingSessionWindow : HistOSets.Controls.WorkAreaWindow
 {
     private readonly TrainingCatalog catalog;
+    private readonly CatalogStore store;
     private readonly string locale;
     private readonly List<(TrainingImageChoice Choice, RadioButton Selector, TrainingImageView View)> imageChoices = [];
     private readonly List<TrainingImageView> reviewChoices = [];
@@ -24,7 +25,7 @@ public partial class TrainingSessionWindow : Window
     private TrainingAnswer? selectedAnswer;
     private Guid? selectedImage;
     private LoadedImage? currentTraceImage;
-    private string answerQuery = "";
+    private TrainingNameQuery? answerQuery;
     private bool initialized;
     private bool updating;
     private bool busy;
@@ -33,14 +34,18 @@ public partial class TrainingSessionWindow : Window
     private bool closed;
     private int generation;
     private Task? initializationTask;
-    private sealed record ResultRow(int Index, string Label, string Answer);
+    private sealed record ResultRow(int Index, string Label, string Answer, Brush Background);
+    private static readonly Brush CorrectBackground = BackgroundBrush(229, 243, 232);
+    private static readonly Brush IncorrectBackground = BackgroundBrush(249, 230, 230);
+    private static readonly Brush SkippedBackground = BackgroundBrush(255, 247, 216);
 
     public TrainingSession Session { get; }
     public bool IsBusy => busy;
     public Window? FinishConfirmation { get; private set; }
 
-    public TrainingSessionWindow(TrainingCatalog catalog, TrainingPlan plan, TrainingSession? preparedSession = null)
+    public TrainingSessionWindow(CatalogStore store, TrainingCatalog catalog, TrainingPlan plan, TrainingSession? preparedSession = null)
     {
+        ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(plan);
         if (catalog.CatalogId != plan.CatalogId || catalog.SourceFingerprint != plan.SourceFingerprint)
@@ -48,6 +53,7 @@ public partial class TrainingSessionWindow : Window
         if (preparedSession is not null && (!ReferenceEquals(preparedSession.Plan, plan) || preparedSession.IsFinished
             || preparedSession.CurrentIndex != 0 || preparedSession.Results.Count != 0))
             throw new ArgumentException("A prepared session must be unused and belong to this exact plan.", nameof(preparedSession));
+        this.store = store;
         this.catalog = catalog;
         locale = plan.Configuration.Locale.ToLowerInvariant();
         Session = preparedSession ?? new(plan);
@@ -82,8 +88,9 @@ public partial class TrainingSessionWindow : Window
         LanguageHint.Text = T("Язык занятия: русский. Чтобы изменить язык, завершите занятие и вернитесь к настройке.",
             "Session language: English. To change it, finish this session and return to setup.");
         AnswerLabel.Text = T("Ваш ответ", "Your answer");
-        AnswerHint.Text = T("Введите часть названия для поиска и выберите ответ из списка. Проверка выполняется только кнопкой «Проверить ответ».",
-            "Type part of a name to search, then select an answer from the list. Your choice is checked only when you select Check answer.");
+        AnswerHint.Text = T("Введите часть названия и выберите термин из списка. Поиск допускает похожие словоформы и небольшие опечатки.",
+            "Type part of a name and select the term from the list. Search allows similar word forms and minor typos.");
+        TraceCriteria.Text = TraceCriterion;
         CheckAnswerButton.Content = T("Проверить ответ", "Check answer");
         SkipButton.Content = T("Пропустить", "Skip");
         FinishButton.Content = T("Завершить занятие", "Finish session");
@@ -96,13 +103,6 @@ public partial class TrainingSessionWindow : Window
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= Window_Loaded;
-        var area = SystemParameters.WorkArea;
-        MinWidth = Math.Min(MinWidth, area.Width);
-        MinHeight = Math.Min(MinHeight, area.Height);
-        Width = Math.Min(Width, area.Width);
-        Height = Math.Min(Height, area.Height);
-        Left = Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - ActualWidth));
-        Top = Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - ActualHeight));
         await InitializeAsync();
     }
 
@@ -121,7 +121,7 @@ public partial class TrainingSessionWindow : Window
             ClearQuestionMedia();
             selectedAnswer = null;
             selectedImage = null;
-            answerQuery = "";
+            answerQuery = null;
             AnswerSelector.ItemsSource = null;
             AnswerSelector.Text = "";
             FeedbackPanel.Visibility = Visibility.Collapsed;
@@ -130,11 +130,12 @@ public partial class TrainingSessionWindow : Window
             ResultsPanel.Visibility = Visibility.Collapsed;
             MethodText.Text = MethodLabel(question.Method);
             QuestionHeading.Text = QuestionText(question);
+            TraceCriteria.Visibility = question.Method == TrainingMethod.TraceElement ? Visibility.Visible : Visibility.Collapsed;
             DescriptionText.Text = question.Description ?? "";
             DescriptionPanel.Visibility = IsDescription(question) ? Visibility.Visible : Visibility.Collapsed;
             NamedAnswerPanel.Visibility = question.Method is TrainingMethod.ChooseImage or TrainingMethod.TraceElement ? Visibility.Collapsed : Visibility.Visible;
             answerView = new ListCollectionView(Session.CurrentAnswers.ToList());
-            answerView.Filter = value => value is TrainingAnswer answer && (answerQuery.Length == 0 || SearchText(answer.Name).Contains(answerQuery, StringComparison.Ordinal));
+            answerView.Filter = value => value is TrainingAnswer answer && (answerQuery?.Matches(answer.Name) ?? true);
             AnswerSelector.ItemsSource = answerView;
             AnswerSelector.SelectedIndex = -1;
             AnswerSelector.Text = "";
@@ -153,14 +154,14 @@ public partial class TrainingSessionWindow : Window
                 ImageChoicesPanel.Visibility = Visibility.Visible;
                 CreateQuestionImageChoices(question);
                 OperationStatus.Text = T("Проверка и загрузка четырёх изображений…", "Verifying and loading four images…");
-                var loaded = await Task.WhenAll(question.ImageChoices.Select(choice => Task.Run(() => TrainingImageLoader.Load(ResolveImage(choice)))));
+                var loaded = await Task.WhenAll(question.ImageChoices.Select(choice => Task.Run(() => TrainingImageLoader.Load(ResolveImage(choice), store.OpenImage))));
                 if (!IsCurrent(request)) return;
                 for (var i = 0; i < loaded.Length; i++) imageChoices[i].View.ShowImage(loaded[i]);
             }
             else if (question.MaterialImageId is not null)
             {
                 OperationStatus.Text = T("Проверка и загрузка изображения…", "Verifying and loading image…");
-                var loaded = await Task.Run(() => TrainingImageLoader.Load(ResolveImage(question)));
+                var loaded = await Task.Run(() => TrainingImageLoader.Load(ResolveImage(question), store.OpenImage));
                 if (!IsCurrent(request)) return;
                 if (question.Method == TrainingMethod.TraceElement)
                 {
@@ -217,8 +218,8 @@ public partial class TrainingSessionWindow : Window
                 TrainingImageError.Changed => T("Изображение изменилось после подготовки занятия. Вернитесь к настройке и сформируйте новый план.",
                     "The image changed after this session was prepared. Return to setup and build a new plan."),
                 TrainingImageError.InvalidImage => T("Изображение не удалось безопасно прочитать.", "The image could not be read safely."),
-                _ => T("Изображение недоступно. Проверьте доступ к файлам и сформируйте новый план.",
-                    "The image is unavailable. Check access to the files and build a new plan.")
+                _ => T("Изображение недоступно. Проверьте каталог и сформируйте новый план.",
+                    "The image is unavailable. Check the catalog and build a new plan.")
             };
         return T("Материалы задания не удалось загрузить. Вернитесь к настройке и сформируйте новый план.",
             "The question media could not be loaded. Return to setup and build a new plan.");
@@ -282,8 +283,6 @@ public partial class TrainingSessionWindow : Window
         ReviewChoicesPanel.Visibility = Visibility.Collapsed;
     }
 
-    private static string SearchText(string value) => value.Normalize(NormalizationForm.FormKC).ToLowerInvariant().Replace('ё', 'е').Trim();
-
     private void Answer_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (!initialized || updating || busy || Session.IsFinished || Session.CurrentResult is not null) return;
@@ -302,7 +301,7 @@ public partial class TrainingSessionWindow : Window
             selectedAnswer = null;
             AnswerSelector.SelectedItem = null;
             AnswerSelector.Text = text;
-            answerQuery = SearchText(text);
+            answerQuery = new TrainingNameQuery(text);
             answerView?.Refresh();
             if (AnswerSelector.IsKeyboardFocusWithin) AnswerSelector.IsDropDownOpen = true;
         }
@@ -335,7 +334,7 @@ public partial class TrainingSessionWindow : Window
         updating = true;
         try
         {
-            answerQuery = "";
+            answerQuery = null;
             answerView?.Refresh();
             selectedAnswer = answer;
             AnswerSelector.SelectedItem = answer;
@@ -467,12 +466,7 @@ public partial class TrainingSessionWindow : Window
         FeedbackText.Text = OutcomeLabel(result.Outcome);
         if (result.Outcome == TrainingOutcome.Unavailable) FeedbackText.Text += ". " + result.Reason;
         else FeedbackText.Text += "\n" + AnswerSummary(result);
-        FeedbackPanel.Background = new SolidColorBrush(result.Outcome switch
-        {
-            TrainingOutcome.Correct => Color.FromRgb(229, 243, 232),
-            TrainingOutcome.Incorrect => Color.FromRgb(249, 230, 230),
-            _ => Color.FromRgb(238, 231, 247)
-        });
+        FeedbackPanel.Background = OutcomeBackground(result.Outcome);
         RefreshCommands();
         var request = generation;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
@@ -519,20 +513,27 @@ public partial class TrainingSessionWindow : Window
             ResultsPanel.Visibility = Visibility.Visible;
             ProgressText.Text = T("Занятие завершено", "Session finished");
             var summary = Session.Summary;
-            ResultsSummary.Text = T($"Всего заданий: {summary.Total}\nРаспознавание — верно: {summary.Correct}   ·   неверно: {summary.Incorrect}\nСравнено обведений: {summary.Compared}\nПропущено: {summary.Skipped}   ·   Недоступно: {summary.Unavailable}   ·   Без ответа: {summary.NotAnswered}",
-                $"Total questions: {summary.Total}\nRecognition — correct: {summary.Correct}   ·   incorrect: {summary.Incorrect}\nDrawings compared: {summary.Compared}\nSkipped: {summary.Skipped}   ·   Unavailable: {summary.Unavailable}   ·   Unanswered: {summary.NotAnswered}");
-            var accuracy = summary.Accuracy?.ToString("P1", CultureInfo.GetCultureInfo(locale == "en" ? "en-US" : "ru-RU"));
-            ResultsSummary.Text += "\n" + (accuracy is null
-                ? T("Доля верных ответов не рассчитана: нет проверенных ответов на распознавание.", "Accuracy is not calculated: there are no checked recognition answers.")
-                : T($"Среди ответов на распознавание верно: {summary.Correct} из {summary.RecognitionAnswered} ({accuracy}).",
-                    $"Correct among recognition answers: {summary.Correct} of {summary.RecognitionAnswered} ({accuracy})."));
+            ResultsSummary.Text = T($"Всего заданий: {summary.Total}\nПропущено: {summary.Skipped}   ·   Недоступно: {summary.Unavailable}   ·   Без ответа: {summary.NotAnswered}",
+                $"Total questions: {summary.Total}\nSkipped: {summary.Skipped}   ·   Unavailable: {summary.Unavailable}   ·   Unanswered: {summary.NotAnswered}");
+            if (Session.Questions.Any(question => question.Method != TrainingMethod.TraceElement))
+            {
+                ResultsSummary.Text += "\n" + T($"Распознавание — верно: {summary.RecognitionCorrect}   ·   неверно: {summary.RecognitionIncorrect}",
+                    $"Recognition — correct: {summary.RecognitionCorrect}   ·   incorrect: {summary.RecognitionIncorrect}");
+                if (summary.Accuracy is { } accuracy)
+                    ResultsSummary.Text += T($"   ·   {summary.RecognitionCorrect} из {summary.RecognitionAnswered} ({FormatPercent(accuracy)})",
+                        $"   ·   {summary.RecognitionCorrect} of {summary.RecognitionAnswered} ({FormatPercent(accuracy)})");
+                else
+                    ResultsSummary.Text += "\n" + T("Доля верных не рассчитана: нет проверенных ответов на распознавание.",
+                        "Recognition accuracy is not calculated: no recognition answers were checked.");
+            }
             if (Session.Questions.Any(question => question.Method == TrainingMethod.TraceElement))
-                ResultsSummary.Text += "\n" + T("Обведения показаны отдельно: проценты сравнения доступны в разборе, общая оценка не выставляется.",
-                    "Drawings are reported separately: comparison percentages are available in review, with no overall grade.");
+                ResultsSummary.Text += "\n" + T($"Обведение — верно: {summary.TraceCorrect}   ·   неверно: {summary.TraceIncorrect}",
+                    $"Drawing — correct: {summary.TraceCorrect}   ·   incorrect: {summary.TraceIncorrect}");
             OperationStatus.Text = T("База данных не изменялась. Закрытие окна удалит результаты этого занятия.",
                 "The catalog has not been changed. Closing this window discards this session's results.");
             ResultsList.ItemsSource = Session.Results.Select((result, index) => new ResultRow(index,
-                $"{index + 1}. {MethodLabel(result.Question.Method)} · {OutcomeLabel(result.Outcome)}", ResultListSummary(result))).ToArray();
+                $"{index + 1}. {MethodLabel(result.Question.Method)} · {OutcomeLabel(result.Outcome)}", ResultListSummary(result),
+                OutcomeBackground(result.Outcome))).ToArray();
             ContentScroll.ScrollToTop();
         }
         finally { updating = false; }
@@ -563,18 +564,27 @@ public partial class TrainingSessionWindow : Window
 
     private string ResultListSummary(TrainingResult result)
     {
+        if (result.Outcome == TrainingOutcome.Unavailable) return result.Reason ?? "";
         if (result.Trace is not { } trace) return AnswerSummary(result);
-        return T($"Покрыто эталона: {FormatPercent(trace.Comparison.Coverage)} · Ваше выделение вне эталона: {FormatPercent(trace.Comparison.ExcessFraction)}",
-            $"Reference covered: {FormatPercent(trace.Comparison.Coverage)} · Your selection outside the reference: {FormatPercent(trace.Comparison.ExcessFraction)}");
+        return T($"Покрытие эталона: {FormatCriterionPercent(trace.Comparison.Coverage)} · Точность выделения: {FormatCriterionPercent(trace.Comparison.Precision)}",
+            $"Reference coverage: {FormatCriterionPercent(trace.Comparison.Coverage)} · Drawing precision: {FormatCriterionPercent(trace.Comparison.Precision)}");
     }
 
-    private string FormatPercent(double? fraction) => fraction?.ToString("P1",
-        CultureInfo.GetCultureInfo(locale == "en" ? "en-US" : "ru-RU")) ?? T("не рассчитано", "not calculated");
+    private CultureInfo ResultCulture => CultureInfo.GetCultureInfo(locale == "en" ? "en-US" : "ru-RU");
+    private string ThresholdLabel => TrainingSession.TracePassThreshold.ToString("P0", ResultCulture);
+    private string TraceCriterion => T($"Для верного ответа покрытие эталона и точность выделения должны быть не ниже {ThresholdLabel} каждое.",
+        $"A correct answer needs at least {ThresholdLabel} for both reference coverage and drawing precision.");
+
+    private string FormatPercent(double? fraction) => fraction?.ToString("P1", ResultCulture) ?? T("не рассчитано", "not calculated");
+
+    // A fraction just below the grading threshold should not round to a seemingly passing result.
+    private string FormatCriterionPercent(double? fraction) => fraction is { } value && value < TrainingSession.TracePassThreshold
+        && Math.Round(value * 100, 1) >= TrainingSession.TracePassThreshold * 100 ? "< " + ThresholdLabel : FormatPercent(fraction);
 
     private string TraceSummary(RegionComparisonResult comparison)
     {
-        return T($"Покрыто эталона: {FormatPercent(comparison.Coverage)}\nВаше выделение внутри эталона: {FormatPercent(comparison.Precision)}\nВаше выделение вне эталона: {FormatPercent(comparison.ExcessFraction)}\nПокрытие рассчитано от площади эталона; две другие доли — от площади вашего выделения. Оценка «верно/неверно» не выставляется.",
-            $"Reference covered: {FormatPercent(comparison.Coverage)}\nYour selection inside the reference: {FormatPercent(comparison.Precision)}\nYour selection outside the reference: {FormatPercent(comparison.ExcessFraction)}\nCoverage uses reference area; the other two percentages use your selected area. No correct/incorrect grade is assigned.");
+        return T($"Покрыто эталона: {FormatCriterionPercent(comparison.Coverage)}\nВаше выделение внутри эталона: {FormatCriterionPercent(comparison.Precision)}\nВаше выделение вне эталона: {FormatPercent(comparison.ExcessFraction)}",
+            $"Reference covered: {FormatCriterionPercent(comparison.Coverage)}\nYour selection inside the reference: {FormatCriterionPercent(comparison.Precision)}\nYour selection outside the reference: {FormatPercent(comparison.ExcessFraction)}") + "\n" + TraceCriterion;
     }
 
     public async Task ReviewQuestionAsync(int index)
@@ -603,7 +613,7 @@ public partial class TrainingSessionWindow : Window
             if (question.Method == TrainingMethod.ChooseImage)
             {
                 ReviewStatus.Text = T("Загрузка изображений для разбора…", "Loading images for review…");
-                var loaded = await Task.WhenAll(question.ImageChoices.Select(choice => Task.Run(() => TrainingImageLoader.Load(ResolveImage(choice)))));
+                var loaded = await Task.WhenAll(question.ImageChoices.Select(choice => Task.Run(() => TrainingImageLoader.Load(ResolveImage(choice), store.OpenImage))));
                 if (!IsCurrent(request)) return;
                 ReviewChoicesPanel.Visibility = Visibility.Visible;
                 for (var i = 0; i < loaded.Length; i++)
@@ -625,7 +635,7 @@ public partial class TrainingSessionWindow : Window
             else if (question.MaterialImageId is not null)
             {
                 ReviewStatus.Text = T("Загрузка изображения для разбора…", "Loading image for review…");
-                var loaded = await Task.Run(() => TrainingImageLoader.Load(ResolveImage(question)));
+                var loaded = await Task.Run(() => TrainingImageLoader.Load(ResolveImage(question), store.OpenImage));
                 if (!IsCurrent(request)) return;
                 if (question.Method == TrainingMethod.TraceElement)
                 {
@@ -675,11 +685,25 @@ public partial class TrainingSessionWindow : Window
     {
         TrainingOutcome.Correct => T("Верно", "Correct"),
         TrainingOutcome.Incorrect => T("Неверно", "Incorrect"),
-        TrainingOutcome.Compared => T("Обведение сравнено", "Drawing compared"),
         TrainingOutcome.Skipped => T("Пропущено", "Skipped"),
         TrainingOutcome.Unavailable => T("Недоступно", "Unavailable"),
         _ => T("Без ответа", "Unanswered")
     };
+
+    private static Brush OutcomeBackground(TrainingOutcome outcome) => outcome switch
+    {
+        TrainingOutcome.Correct => CorrectBackground,
+        TrainingOutcome.Incorrect => IncorrectBackground,
+        TrainingOutcome.Skipped => SkippedBackground,
+        _ => Brushes.White
+    };
+
+    private static Brush BackgroundBrush(byte red, byte green, byte blue)
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
+        brush.Freeze();
+        return brush;
+    }
 
     private void SetBusy(bool value) { busy = value; RefreshCommands(); }
 
@@ -725,11 +749,10 @@ public partial class TrainingSessionWindow : Window
         var content = new StackPanel { Margin = new Thickness(20) };
         content.Children.Add(text);
         content.Children.Add(buttons);
-        var dialog = new Window
+        var dialog = new HistOSets.Controls.WorkAreaWindow
         {
             Title = T("Завершение занятия", "Finish session"), Content = content, Owner = this,
-            Width = Math.Min(620, SystemParameters.WorkArea.Width), SizeToContent = SizeToContent.Height,
-            MaxHeight = SystemParameters.WorkArea.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Width = 620, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner,
             ResizeMode = ResizeMode.NoResize, Background = new SolidColorBrush(Color.FromRgb(244, 241, 248)), ShowInTaskbar = false
         };
         resume.Click += (_, _) => dialog.DialogResult = false;

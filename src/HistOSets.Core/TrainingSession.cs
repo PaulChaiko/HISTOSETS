@@ -1,8 +1,8 @@
 namespace HistOSets.Core;
 
-public enum TrainingOutcome { Correct, Incorrect, Skipped, Unavailable, NotAnswered, Compared }
+public enum TrainingOutcome { Correct, Incorrect, Skipped, Unavailable, NotAnswered }
 
-/// <summary>A frozen drawing and its geometric comparison, without a pass/fail threshold.</summary>
+/// <summary>A frozen drawing and the quantitative evidence behind its grade.</summary>
 public sealed class TrainingTraceAnswer
 {
     internal TrainingTraceAnswer(IEnumerable<RegionGeometry> regions, RegionComparisonResult comparison)
@@ -13,6 +13,8 @@ public sealed class TrainingTraceAnswer
 
     public IReadOnlyList<RegionGeometry> Regions { get; }
     public RegionComparisonResult Comparison { get; }
+    public bool IsCorrect => Comparison.Coverage >= TrainingSession.TracePassThreshold
+        && Comparison.Precision is >= TrainingSession.TracePassThreshold;
 }
 
 /// <summary>A completed question result. The prepared question and the submitted choice never change.</summary>
@@ -20,7 +22,7 @@ public sealed record TrainingResult(TrainingQuestion Question, TrainingOutcome O
     TrainingAnswer? SelectedAnswer = null, Guid? SelectedMaterialImageId = null, string? Reason = null,
     TrainingTraceAnswer? Trace = null);
 
-/// <summary>Counts describe all executable questions; Accuracy is the recognition-only ratio, not a drawing grade.</summary>
+/// <summary>Graded counts include both types of answer; Accuracy reports recognition separately.</summary>
 public sealed class TrainingSummary
 {
     internal TrainingSummary(int total, IReadOnlyList<TrainingResult> results)
@@ -28,7 +30,8 @@ public sealed class TrainingSummary
         Total = total;
         Correct = results.Count(r => r.Outcome == TrainingOutcome.Correct);
         Incorrect = results.Count(r => r.Outcome == TrainingOutcome.Incorrect);
-        Compared = results.Count(r => r.Outcome == TrainingOutcome.Compared);
+        TraceCorrect = results.Count(r => r.Trace is not null && r.Outcome == TrainingOutcome.Correct);
+        TraceIncorrect = results.Count(r => r.Trace is not null && r.Outcome == TrainingOutcome.Incorrect);
         Skipped = results.Count(r => r.Outcome == TrainingOutcome.Skipped);
         Unavailable = results.Count(r => r.Outcome == TrainingOutcome.Unavailable);
         NotAnswered = results.Count(r => r.Outcome == TrainingOutcome.NotAnswered);
@@ -38,23 +41,29 @@ public sealed class TrainingSummary
     public int Total { get; }
     public int Correct { get; }
     public int Incorrect { get; }
-    public int Compared { get; }
-    public int RecognitionAnswered => Correct + Incorrect;
-    public int Answered => RecognitionAnswered + Compared;
+    public int TraceCorrect { get; }
+    public int TraceIncorrect { get; }
+    public int Compared => TraceCorrect + TraceIncorrect;
+    public int RecognitionCorrect => Correct - TraceCorrect;
+    public int RecognitionIncorrect => Incorrect - TraceIncorrect;
+    public int RecognitionAnswered => RecognitionCorrect + RecognitionIncorrect;
+    public int Answered => Correct + Incorrect;
     public int Skipped { get; }
     public int Unavailable { get; }
     public int NotAnswered { get; }
     public int Pending { get; }
-    public double? Accuracy => RecognitionAnswered == 0 ? null : (double)Correct / RecognitionAnswered;
+    public double? Accuracy => RecognitionAnswered == 0 ? null : (double)RecognitionCorrect / RecognitionAnswered;
 }
 
 /// <summary>
 /// An in-memory training session over an immutable prepared plan. An answer is submitted once,
 /// feedback remains current until Advance, and no attempt data is written to the catalog.
-/// Recognition is checked by answer identity; tracing receives quantitative geometric feedback.
+/// Recognition is checked by answer identity; tracing requires sufficient coverage and precision.
 /// </summary>
 public sealed class TrainingSession
 {
+    public const double TracePassThreshold = .75;
+
     private readonly List<TrainingResult> results = [];
     private readonly IReadOnlyDictionary<string, TrainingAnswer> objectAnswers;
     private readonly IReadOnlyDictionary<string, TrainingAnswer> elementAnswers;
@@ -152,11 +161,11 @@ public sealed class TrainingSession
             selected.Answer, selected.MaterialImageId));
     }
 
-    /// <summary>Freezes one completed drawing and compares union areas; it does not invent a correct/incorrect grade.</summary>
+    /// <summary>Freezes one completed drawing and grades it by both comparison fractions.</summary>
     public TrainingResult SubmitTrace(IEnumerable<RegionGeometry> regions)
     {
         var (question, frozenRegions) = PrepareTrace(regions);
-        return Complete(new(question, TrainingOutcome.Compared, Trace: CompareTrace(question, frozenRegions)));
+        return CompleteTrace(question, CompareTrace(question, frozenRegions));
     }
 
     /// <summary>Computes geometry off the caller's context and commits only while the captured question remains pending.</summary>
@@ -170,8 +179,11 @@ public sealed class TrainingSession
         cancellationToken.ThrowIfCancellationRequested();
         if (!ReferenceEquals(question, RequirePendingQuestion()))
             throw new InvalidOperationException("The tracing question changed while its answer was being compared.");
-        return Complete(new(question, TrainingOutcome.Compared, Trace: answer));
+        return CompleteTrace(question, answer);
     }
+
+    private TrainingResult CompleteTrace(TrainingQuestion question, TrainingTraceAnswer answer)
+        => Complete(new(question, answer.IsCorrect ? TrainingOutcome.Correct : TrainingOutcome.Incorrect, Trace: answer));
 
     private (TrainingQuestion Question, IReadOnlyList<RegionGeometry> Regions) PrepareTrace(IEnumerable<RegionGeometry> regions)
     {

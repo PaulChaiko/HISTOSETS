@@ -8,7 +8,7 @@ using HistOSets.Services;
 namespace HistOSets;
 
 /// <summary>Edits calibration locally; the parent owns the working copy and catalog save.</summary>
-internal sealed class ImageCalibrationDialog : Window
+internal sealed class ImageCalibrationDialog : HistOSets.Controls.WorkAreaWindow
 {
     private readonly int pixelWidth;
     private readonly int pixelHeight;

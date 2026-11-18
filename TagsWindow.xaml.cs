@@ -6,7 +6,7 @@ using HistOSets.Storage;
 
 namespace HistOSets;
 
-public partial class TagsWindow : Window
+public partial class TagsWindow : HistOSets.Controls.WorkAreaWindow
 {
     private readonly CatalogStore store;
     private readonly Guid? material;
@@ -15,7 +15,7 @@ public partial class TagsWindow : Window
     private List<TagChoice> choices = [];
     private HashSet<Guid> original = [];
     private bool loaded;
-    private sealed record GroupChoice(Guid? Id, bool All, string Name, bool IsSystem = false);
+    private sealed record GroupChoice(Guid? Id, bool All, string Name);
     private static string T(string ru, string en) => UiLanguage.T(ru, en);
 
     public sealed class TagChoice
@@ -37,17 +37,14 @@ public partial class TagsWindow : Window
         Title = T("Типовые теги — HISTOSETS", "Typed tags — HISTOSETS");
         Heading.Text = material is null ? T("Типовые теги", "Typed tags") : T("Теги объекта: ", "Object tags: ") + name;
         Instructions.Text = material is null
-            ? T("Выберите тип и создайте значение тега или измените существующее. Типы, заданные системой, фиксированы. Старые группы сохранены; теги из них можно перенести в нужный тип через «Изменить». Изменения справочника сохраняются сразу.",
-                "Choose a type and create or edit a tag value. System types are fixed. Legacy groups are preserved; use Edit to move their tags to a suitable type. Dictionary changes are saved immediately.")
+            ? T("Выберите один из шести типов и создайте или измените значение тега. Изменения справочника сохраняются сразу. Назначить теги можно в редакторе объекта.",
+                "Choose one of the six types and create or edit a tag value. Dictionary changes are saved immediately. Assign tags in the object editor.")
             : T("Выберите тип и отметьте существующие теги либо создайте новые значения. Поиск учитывает оба языка. Назначения сохраняются кнопкой внизу. Изменения справочника сохраняются сразу и действуют для всех объектов.",
                 "Choose a type and check existing tags or create new values. Search covers both languages. Save assignments using the button below. Dictionary changes are saved immediately and affect all objects.");
         TypesLabel.Text = T("Типы тегов", "Tag types");
         TagsLabel.Text = T("Значения тегов", "Tag values");
         TagSearch.ToolTip = T("Поиск существующего значения на RU или EN", "Search existing values in RU or EN");
         System.Windows.Automation.AutomationProperties.SetName(TagSearch, T("Поиск тегов", "Search tags"));
-        EditGroupButton.Content = T("Изменить группу…", "Edit group…");
-        DeleteGroupButton.Content = T("Удалить", "Delete");
-        EditGroupButton.ToolTip = DeleteGroupButton.ToolTip = T("Доступно только для старых пользовательских групп", "Available only for legacy custom groups");
         NewTagButton.Content = T("Создать тег…", "Create tag…");
         EditTagButton.Content = T("Изменить…", "Edit…");
         DeleteTagButton.Content = T("Удалить", "Delete");
@@ -81,9 +78,7 @@ public partial class TagsWindow : Window
             AssignmentVisibility = material is null ? Visibility.Collapsed : Visibility.Visible
         }).ToList();
         var groups = new List<GroupChoice> { new(null, true, T("Все типы", "All types")) };
-        groups.AddRange(taxonomy.Groups.OrderByDescending(g => g.IsSystem).Select(g => new GroupChoice(g.Id, false,
-            CatalogBrowser.Label(g.Names, locale) + (g.IsSystem ? "" : T(" (старая группа)", " (legacy group)")), g.IsSystem)));
-        if (taxonomy.Tags.Any(t => t.GroupId is null)) groups.Add(new(null, false, T("Без типа (старые теги)", "Untyped (legacy tags)")));
+        groups.AddRange(taxonomy.Groups.Where(g => g.IsSystem).Select(g => new GroupChoice(g.Id, false, CatalogBrowser.Label(g.Names, locale))));
         GroupList.ItemsSource = groups;
         GroupList.SelectedItem = selectGroup is not null ? groups.FirstOrDefault(g => g.Id == selectGroup) ?? groups[0]
             : groups.FirstOrDefault(g => previous is not null && g.Id == previous.Id && g.All == previous.All) ?? groups[0];
@@ -91,14 +86,12 @@ public partial class TagsWindow : Window
         RefreshTags();
         if (selectTag is not null) TagList.SelectedItem = choices.FirstOrDefault(t => t.Id == selectTag);
         OperationStatus.Text = choices.Count == 0 ? T("Выберите тип и создайте первое значение тега.", "Choose a type and create the first tag value.")
-            : T($"Типов и старых групп: {taxonomy.Groups.Count}. Тегов: {taxonomy.Tags.Count}.", $"Types and legacy groups: {taxonomy.Groups.Count}. Tags: {taxonomy.Tags.Count}.");
+            : T($"Типов: {groups.Count - 1}. Тегов: {taxonomy.Tags.Count}.", $"Types: {groups.Count - 1}. Tags: {taxonomy.Tags.Count}.");
     }
 
     private void Group_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (TagList is null) return;
-        var editable = GroupList.SelectedItem is GroupChoice { Id: not null, IsSystem: false };
-        EditGroupButton.IsEnabled = DeleteGroupButton.IsEnabled = editable;
         RefreshTags();
     }
 
@@ -124,23 +117,6 @@ public partial class TagsWindow : Window
         }
     }
 
-    private void EditGroup_Click(object sender, RoutedEventArgs e)
-    {
-        if (GroupList.SelectedItem is not GroupChoice { Id: { } id, IsSystem: false }) return;
-        var group = taxonomy.Groups.Single(g => g.Id == id);
-        var dialog = new TaxonomyEditWindow(T("Изменить старую группу", "Edit legacy group"), group.Names, null, null,
-            (ru, en, _) => store.SaveTagGroup(group.Id, ru, en)) { Owner = this };
-        if (dialog.ShowDialog() == true) Try(() => Refresh(id));
-    }
-
-    private void DeleteGroup_Click(object sender, RoutedEventArgs e)
-    {
-        if (GroupList.SelectedItem is not GroupChoice { Id: { } id, IsSystem: false }) return;
-        if (MessageBox.Show(this, T("Удалить старую группу? Сначала перенесите или удалите все её теги.", "Delete the legacy group? First move or delete all its tags."),
-            "HISTOSETS", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
-            Try(() => { store.DeleteTagGroup(id); Refresh(); });
-    }
-
     private void NewTag_Click(object sender, RoutedEventArgs e) => EditTag(null);
     private void EditTag_Click(object sender, RoutedEventArgs e)
     {
@@ -150,10 +126,7 @@ public partial class TagsWindow : Window
 
     private void EditTag(CatalogTag? tag)
     {
-        var groups = taxonomy.Groups.Select(g => ((Guid?)g.Id, CatalogBrowser.Label(g.Names, locale)
-            + (g.IsSystem ? "" : T(" (старая группа)", " (legacy group)")))).ToList();
-        // Untyped legacy values remain editable, but new values always receive a type.
-        if (tag is { GroupId: null }) groups.Insert(0, (null, T("Без типа (старый тег)", "Untyped (legacy tag)")));
+        var groups = taxonomy.Groups.Where(g => g.IsSystem).Select(g => ((Guid?)g.Id, CatalogBrowser.Label(g.Names, locale))).ToList();
         Guid? saved = null;
         Guid? savedGroup = null;
         var dialog = new TaxonomyEditWindow(tag is null ? T("Создать тег", "Create tag") : T("Изменить тег", "Edit tag"), tag?.Names, groups,
@@ -184,7 +157,7 @@ public partial class TagsWindow : Window
     private void SaveAssignments_Click(object sender, RoutedEventArgs e) { if (Save()) Close(); }
 }
 
-internal sealed class TaxonomyEditWindow : Window
+internal sealed class TaxonomyEditWindow : HistOSets.Controls.WorkAreaWindow
 {
     private sealed record GroupOption(Guid? Id, string Name);
     private static string T(string ru, string en) => UiLanguage.T(ru, en);

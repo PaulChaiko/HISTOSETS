@@ -9,7 +9,7 @@ using HistOSets.Storage;
 namespace HistOSets;
 
 /// <summary>Edits an isolated list. Only Apply returns descriptions to the parent working copy.</summary>
-public partial class TrainingPromptWindow : Window
+public partial class TrainingPromptWindow : HistOSets.Controls.WorkAreaWindow
 {
     private List<TrainingPromptDraft> prompts;
     private readonly string initialFingerprint;
@@ -261,7 +261,7 @@ public partial class TrainingPromptWindow : Window
     }
 }
 
-internal sealed class TrainingPromptDiscardPrompt : Window
+internal sealed class TrainingPromptDiscardPrompt : HistOSets.Controls.WorkAreaWindow
 {
     public bool Discard { get; private set; }
     public TrainingPromptDiscardPrompt()

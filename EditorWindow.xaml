@@ -1,6 +1,7 @@
-<Window x:Class="HistOSets.EditorWindow"
+<fit:WorkAreaWindow x:Class="HistOSets.EditorWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:fit="clr-namespace:HistOSets.Controls"
         xmlns:controls="clr-namespace:HistOSets.Controls"
         Title="HISTOSETS" Width="1420" Height="900" MinWidth="1000" MinHeight="700"
         WindowStartupLocation="CenterOwner" Background="#F4F1F8"
@@ -24,10 +25,9 @@
             <DockPanel Grid.Column="0">
                 <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="ImageHeading" FontWeight="Bold" Margin="0,0,0,5"/>
-                    <ComboBox x:Name="ImageList" DisplayMemberPath="Label" SelectionChanged="Image_Changed" Margin="0,0,0,7"/>
+                    <TextBlock x:Name="ImageSummary" TextWrapping="Wrap" Margin="0,0,0,7"/>
                     <WrapPanel Margin="0,0,0,7">
                         <Button x:Name="AddImageButton" Click="AddImage_Click"/>
-                        <Button x:Name="PrimaryImageButton" Click="PrimaryImage_Click"/>
                         <Button x:Name="RemoveImageButton" Click="RemoveImage_Click"/>
                         <Button x:Name="CalibrationButton" Click="Calibration_Click"/>
                     </WrapPanel>
@@ -42,7 +42,11 @@
                     </WrapPanel>
                     <WrapPanel Margin="0,0,0,7" VerticalAlignment="Center">
                         <TextBlock x:Name="BrushRadiusLabel" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <TextBox x:Name="BrushRadiusInput" Text="16" Width="66" VerticalContentAlignment="Center" Margin="0,0,10,0" LostKeyboardFocus="BrushRadius_LostFocus" KeyDown="BrushRadius_KeyDown"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,6,0">
+                            <RepeatButton x:Name="BrushRadiusDecrease" Content="−" MinWidth="30" Margin="0,0,4,0"/>
+                            <TextBox x:Name="BrushRadiusInput" Text="16" Width="66" VerticalContentAlignment="Center" Margin="0,0,4,0" LostKeyboardFocus="BrushRadius_LostFocus" KeyDown="BrushRadius_KeyDown"/>
+                            <RepeatButton x:Name="BrushRadiusIncrease" Content="+" MinWidth="30"/>
+                        </StackPanel>
                         <Button x:Name="NewRegionButton" Click="NewRegion_Click"/>
                     </WrapPanel>
                     <WrapPanel Margin="0,0,0,7">
@@ -123,7 +127,11 @@
                         <TextBlock x:Name="TagTypeLabel" FontWeight="Bold" Margin="0,15,0,5"/>
                         <ComboBox x:Name="TagTypeList" DisplayMemberPath="Label" SelectionChanged="TagType_Changed"/>
                         <TextBox x:Name="TagSearch" TextChanged="TagSearch_Changed" Margin="0,7,0,7"/>
-                        <StackPanel x:Name="TagChoices"/>
+                        <Border BorderBrush="#D7CDE9" BorderThickness="1" Background="{StaticResource BrandSurfaceBrush}">
+                            <ScrollViewer x:Name="TagValuesScroll" MaxHeight="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="TagChoices" Margin="8,4"/>
+                            </ScrollViewer>
+                        </Border>
                         <Button x:Name="NewTagButton" Click="NewTag_Click" HorizontalAlignment="Left" Margin="0,7,0,0"/>
                         <TextBlock x:Name="DictionaryHelp" TextWrapping="Wrap" Margin="0,8,0,10"/>
                         <TextBlock x:Name="AuthorCreditLabel"/><TextBox x:Name="AuthorCredit" TextChanged="Form_TextChanged" LostKeyboardFocus="Form_LostFocus"/>
@@ -133,4 +141,4 @@
             </TabControl>
         </Grid>
     </DockPanel>
-</Window>
+</fit:WorkAreaWindow>

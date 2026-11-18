@@ -9,7 +9,7 @@ using HistOSets.Storage;
 namespace HistOSets;
 
 /// <summary>Read-only preparation, eligibility review and launch of a session against a revalidated catalog snapshot.</summary>
-public partial class TrainingSetupWindow : Window
+public partial class TrainingSetupWindow : HistOSets.Controls.WorkAreaWindow
 {
     private readonly CatalogStore store;
     private readonly List<MaterialRow> materials = [];
@@ -50,13 +50,6 @@ public partial class TrainingSetupWindow : Window
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= Window_Loaded;
-        var area = SystemParameters.WorkArea;
-        MinWidth = Math.Min(MinWidth, area.Width);
-        MinHeight = Math.Min(MinHeight, area.Height);
-        Width = Math.Min(Width, area.Width);
-        Height = Math.Min(Height, area.Height);
-        Left = Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - ActualWidth));
-        Top = Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - ActualHeight));
         if (Catalog is null) await ReloadCatalogAsync();
     }
 
@@ -124,7 +117,7 @@ public partial class TrainingSetupWindow : Window
         ShowStatus(() => T("Чтение материалов и проверка изображений…", "Reading materials and verifying images…"));
         try
         {
-            var result = await Task.Run(() => (Catalog: store.CaptureTrainingCatalog(ImageLoader.ReadMetadata), Taxonomy: store.LoadTaxonomy()));
+            var result = await Task.Run(() => (Catalog: store.CaptureTrainingCatalog(), Taxonomy: store.LoadTaxonomy()));
             var changed = Catalog is not null && Catalog.SourceFingerprint != result.Catalog.SourceFingerprint;
             InstallCatalog(result.Catalog, result.Taxonomy);
             ShowStatus(() => changed
@@ -204,7 +197,7 @@ public partial class TrainingSetupWindow : Window
         {
             var result = await Task.Run(() =>
             {
-                var snapshot = store.CaptureTrainingCatalog(ImageLoader.ReadMetadata);
+                var snapshot = store.CaptureTrainingCatalog();
                 return (Catalog: snapshot, Taxonomy: store.LoadTaxonomy(), Plan: snapshot.SourceFingerprint == fingerprint ? TrainingPlanner.Build(snapshot, configuration) : null);
             });
             InstallCatalog(result.Catalog, result.Taxonomy);
@@ -242,7 +235,7 @@ public partial class TrainingSetupWindow : Window
         ShowStatus(() => T("Проверка материалов перед началом занятия…", "Verifying materials before starting the session…"));
         try
         {
-            var result = await Task.Run(() => (Catalog: store.CaptureTrainingCatalog(ImageLoader.ReadMetadata), Taxonomy: store.LoadTaxonomy()));
+            var result = await Task.Run(() => (Catalog: store.CaptureTrainingCatalog(), Taxonomy: store.LoadTaxonomy()));
             InstallCatalog(result.Catalog, result.Taxonomy);
             if (result.Catalog.CatalogId != plan.CatalogId || result.Catalog.SourceFingerprint != plan.SourceFingerprint)
             {
@@ -268,7 +261,7 @@ public partial class TrainingSetupWindow : Window
                     "Settings or language changed during verification. Build the plan again."));
                 return;
             }
-            ActiveSession = new TrainingSessionWindow(result.Catalog, plan, session) { Owner = this };
+            ActiveSession = new TrainingSessionWindow(store, result.Catalog, plan, session) { Owner = this };
             ActiveSession.ShowDialog();
             ShowStatus(() => ReferenceEquals(Plan, plan)
                 ? T("Занятие закрыто. План сохранён в этом окне; можно начать новое занятие с повторной проверкой материалов.",
@@ -321,8 +314,14 @@ public partial class TrainingSetupWindow : Window
         PlanHint.Text = T($"Недоступных сочетаний объект–метод: {excluded}. Справочник ответов: объектов — {plan.ObjectAnswers.Count}, элементов — {plan.ElementAnswers.Count}. Язык: русский.",
             $"Unavailable object/method pairs: {excluded}. Answer dictionary: {plan.ObjectAnswers.Count} objects, {plan.ElementAnswers.Count} elements. Language: English.");
         var tracingCount = plan.Questions.Count(question => question.Method == TrainingMethod.TraceElement);
-        PlanHint.Text += T($"\nВ занятии: распознавание — {plan.QuestionCount - tracingCount}, обведение — {tracingCount}. Обведение сравнивается по площади, без оценки «верно/неверно».",
-            $"\nSession questions: recognition — {plan.QuestionCount - tracingCount}, outlining — {tracingCount}. Outlining compares areas without a correct/incorrect grade.");
+        PlanHint.Text += T($"\nВ занятии: распознавание — {plan.QuestionCount - tracingCount}, обведение — {tracingCount}.",
+            $"\nSession questions: recognition — {plan.QuestionCount - tracingCount}, outlining — {tracingCount}.");
+        if (tracingCount > 0)
+        {
+            var percent = TrainingSession.TracePassThreshold * 100;
+            PlanHint.Text += T($" Для верного обведения покрытие эталона и точность выделения должны быть не ниже {percent:0} % каждое.",
+                $" A correct drawing needs at least {percent:0}% for both reference coverage and drawing precision.");
+        }
         EligibilityList.ItemsSource = plan.Eligibility.Select(item => new EligibilityRow(MaterialName(item.MaterialId), MethodLabel(item.Method), item.QuestionCount,
             item.Issues.Count == 0 ? T("Материал пригоден", "Material is eligible") : string.Join("\n", item.Issues.Select(issue => IssueLabel(item.MaterialId, issue))))).ToArray();
         QueueList.ItemsSource = plan.Questions.Select((question, index) => new QueueRow(index + 1, MethodLabel(question.Method), MaterialName(question.MaterialId), question.Answer.Name, question)).ToArray();

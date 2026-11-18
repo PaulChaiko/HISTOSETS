@@ -13,7 +13,7 @@ using HistOSets.Storage;
 namespace HistOSets;
 
 /// <summary>Index of all editable cards, including incomplete drafts. The owner retains the store.</summary>
-public partial class EditorCatalogWindow : Window
+public partial class EditorCatalogWindow : HistOSets.Controls.WorkAreaWindow
 {
     private readonly CatalogStore store;
     private CatalogTaxonomy taxonomy = CatalogTaxonomy.Empty;
@@ -83,6 +83,8 @@ public partial class EditorCatalogWindow : Window
         NewButton.Content = T("Новый объект…", "New object…");
         EditButton.Content = T("Редактировать…", "Edit…");
         DeleteButton.Content = T("Удалить…", "Delete…");
+        TagDictionaryButton.Content = T("Справочник тегов…", "Tag dictionary…");
+        AnalogDictionaryButton.Content = T("Группы аналогов…", "Analogue groups…");
         RefreshButton.Content = T("Обновить", "Refresh");
         CloseButton.Content = T("Закрыть", "Close");
         LanguageButton.ToolTip = T("Переключить интерфейс и данные на английский", "Switch interface and content to Russian");
@@ -105,7 +107,7 @@ public partial class EditorCatalogWindow : Window
 
     private void UpdateButtons()
     {
-        NewButton.IsEnabled = indexLoaded && !busy;
+        NewButton.IsEnabled = TagDictionaryButton.IsEnabled = AnalogDictionaryButton.IsEnabled = indexLoaded && !busy;
         EditButton.IsEnabled = DeleteButton.IsEnabled = indexLoaded && !busy && SelectedId is not null;
     }
 
@@ -155,7 +157,7 @@ public partial class EditorCatalogWindow : Window
         var metadata = tagGroups.Select(tags =>
         {
             var type = taxonomy.Groups.FirstOrDefault(value => value.Id == tags.Key);
-            return (type is null ? T("Без типа", "Untyped") : CatalogBrowser.Label(type.Names, UiLanguage.Locale))
+            return (type is null ? T("Прочее", "Other") : CatalogBrowser.Label(type.Names, UiLanguage.Locale))
                 + ": " + string.Join(", ", tags.Select(tag => CatalogBrowser.Label(tag.Names, UiLanguage.Locale)));
         }).ToList();
         if (group is not null) metadata.Insert(0, T("Аналоги: ", "Analogues: ") + group);
@@ -167,7 +169,7 @@ public partial class EditorCatalogWindow : Window
             StatusLabel = entry.Status == "ready" ? T("Готов", "Ready") : T("Черновик", "Draft"),
             StatusBrush = (Brush)FindResource(entry.Status == "ready" ? "SpecimenListBrush" : "ElementListBrush"),
             SearchText = CatalogBrowser.Normalize(string.Join(" ", entry.Names.Values.Concat(entry.AnalogGroupNames.Values))),
-            ThumbnailHint = entry.ImagePath is null ? T("Без изображения", "No image") : T("Загрузка…", "Loading…")
+            ThumbnailHint = entry.ImageId is null ? T("Без изображения", "No image") : T("Загрузка…", "Loading…")
         };
     }
 
@@ -175,10 +177,8 @@ public partial class EditorCatalogWindow : Window
     {
         var previous = selectedType;
         var result = new List<TypeChoice> { new(null, true, T("Все типы", "All types"), "") };
-        result.AddRange(taxonomy.Groups.Select(group => new TypeChoice(group.Id, false,
+        result.AddRange(taxonomy.Groups.Where(group => group.IsSystem).Select(group => new TypeChoice(group.Id, false,
             CatalogBrowser.Label(group.Names, UiLanguage.Locale), CatalogBrowser.Normalize(string.Join(" ", group.Names.Values)))));
-        if (taxonomy.Tags.Any(tag => tag.GroupId is null))
-            result.Add(new(null, false, T("Без типа", "Untyped"), CatalogBrowser.Normalize("Без типа Untyped")));
         types = result;
         selectedType = types.FirstOrDefault(type => previous is not null && type.Id == previous.Id && type.All == previous.All) ?? types[0];
         updating = true;
@@ -289,6 +289,23 @@ public partial class EditorCatalogWindow : Window
         ApplyFilters();
     }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await ReloadIndex();
+    private async void TagDictionary_Click(object sender, RoutedEventArgs e)
+        => await OpenDictionary(() => new TagsWindow(store, null, null, UiLanguage.Locale));
+    private async void AnalogDictionary_Click(object sender, RoutedEventArgs e)
+        => await OpenDictionary(() => new AnalogGroupsWindow(store, null, null, UiLanguage.Locale));
+
+    private async Task OpenDictionary(Func<Window> create)
+    {
+        if (busy || !indexLoaded) return;
+        try
+        {
+            var dialog = create();
+            dialog.Owner = this;
+            dialog.ShowDialog();
+            await ReloadIndex();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
     private void Language_Click(object sender, RoutedEventArgs e)
     {
         try { UiLanguage.Set(UiLanguage.Locale == "ru" ? "en" : "ru"); }
@@ -336,7 +353,7 @@ public partial class EditorCatalogWindow : Window
         if (succeeded)
         {
             await ReloadIndex();
-            ShowMessage(() => T("Объект удалён. Исходные файлы изображений сохранены в каталоге.", "Object deleted. Original image files are retained in the catalog."));
+            ShowMessage(() => T("Объект удалён.", "Object deleted."));
         }
     }
 
@@ -355,7 +372,8 @@ public partial class EditorCatalogWindow : Window
     }
     private async Task LoadThumbnail(Image image)
     {
-        if (closed || image.DataContext is not MaterialChoice choice || choice.Entry.ImagePath is not { } path || choice.ThumbnailRequested) return;
+        if (closed || image.DataContext is not MaterialChoice choice || choice.Entry.ImageId is not { } id || choice.ThumbnailRequested) return;
+        var path = id.ToString();
         choice.ThumbnailRequested = true;
         var token = thumbnailCancellation.Token;
         var entered = false;
@@ -368,7 +386,7 @@ public partial class EditorCatalogWindow : Window
             if (!IsCurrent()) return;
             if (!thumbnailCache.TryGetValue(path, out cached))
             {
-                cached = await Task.Run(() => DecodeThumbnail(path), token);
+                cached = await Task.Run(() => ImageLoader.Load(store, id, maxDimension: 144).Bitmap, token);
                 if (closed) return;
                 if (thumbnailCache.TryGetValue(path, out var existing)) cached = existing;
                 else
@@ -386,28 +404,6 @@ public partial class EditorCatalogWindow : Window
             if (IsCurrent()) choice.SetUnavailable(T("Изображение недоступно", "Image unavailable"));
         }
         finally { if (entered) thumbnailSlots.Release(); }
-    }
-    private static BitmapSource DecodeThumbnail(string path)
-    {
-        int width, height;
-        using (var stream = File.OpenRead(path))
-        {
-            var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnDemand);
-            var frame = decoder.Frames[0];
-            width = frame.PixelWidth; height = frame.PixelHeight;
-        }
-        if (width <= 0 || height <= 0) throw new InvalidDataException();
-        using var source = File.OpenRead(path);
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.StreamSource = source;
-        var ratio = Math.Min(1d, Math.Min(160d / width, 120d / height));
-        bitmap.DecodePixelWidth = Math.Max(1, (int)Math.Floor(width * ratio));
-        bitmap.DecodePixelHeight = Math.Max(1, (int)Math.Floor(height * ratio));
-        bitmap.EndInit();
-        bitmap.Freeze();
-        return bitmap;
     }
 
     public sealed class MaterialChoice(MaterialIndexEntry entry) : INotifyPropertyChanged

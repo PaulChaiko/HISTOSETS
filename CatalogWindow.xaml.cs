@@ -6,21 +6,19 @@ using Microsoft.Win32;
 
 namespace HistOSets;
 
-public partial class CatalogWindow : Window
+public partial class CatalogWindow : HistOSets.Controls.WorkAreaWindow
 {
     private readonly CatalogStore? store;
-    private readonly string sourceDirectory;
     private bool busy;
     private Func<string>? statusFactory;
-    public string? SelectedCatalogDirectory { get; private set; }
+    public string? SelectedCatalogPath { get; private set; }
 
-    public CatalogWindow(CatalogStore? store, string directory, string sourceDirectory)
+    public CatalogWindow(CatalogStore? store)
     {
         this.store = store;
-        this.sourceDirectory = sourceDirectory;
         InitializeComponent();
-        LocationText.Text = directory;
-        BackupButton.IsEnabled = ImportButton.IsEnabled = NamePanel.IsEnabled = store is not null;
+        LocationText.Text = store?.DatabasePath ?? "";
+        BackupButton.IsEnabled = NamePanel.IsEnabled = store is not null;
         UiLanguage.Changed += Language_Changed;
         ApplyLanguage();
         RefreshStatistics(refreshName: true);
@@ -36,15 +34,12 @@ public partial class CatalogWindow : Window
         HeadingText.Text = T("Управление базой HISTOSETS", "HISTOSETS database management");
         NameLabel.Text = T("Название базы данных", "Database name");
         RenameButton.Content = T("Переименовать", "Rename");
-        BackupButton.Content = T("Создать резервную копию…", "Create backup…");
-        RestoreButton.Content = T("Восстановить копию…", "Restore backup…");
-        OpenButton.Content = T("Открыть каталог…", "Open catalog…");
-        CreateXmlButton.Content = T("Создать из XML…", "Create from XML…");
-        ImportButton.Content = T("Повторить импорт XML…", "Repeat XML import…");
+        BackupButton.Content = T("Сохранить копию…", "Save a copy…");
+        ConvertButton.Content = T("Перенести старый каталог…", "Convert an older catalog…");
         CloseButton.Content = T("Закрыть", "Close");
         HelpText.Text = T(
-            "Резервная копия включает базу, изображения и исходный XML, если он был импортирован. Для восстановления выберите пустую папку: текущий каталог сохранится.\n\nИзменение исходного XML не меняет базу автоматически. Повтор того же импорта не создаёт дубликатов. Для другой версии XML создайте отдельный каталог.\n\nПри выборе XML рядом с его папкой ATLAS должна находиться папка SPECIMENS с изображениями. Новую пустую базу можно создать на стартовом экране.",
-            "A backup includes the database, images, and source XML when imported. Restore into an empty folder; the current catalog will remain intact.\n\nEditing the source XML does not change the database automatically. Repeating the same import creates no duplicates. Create a separate catalog for another XML version.\n\nWhen choosing an XML file, its ATLAS folder should have a sibling SPECIMENS folder containing the images. An empty database can be created on the home screen.");
+            "Копия .histosets включает данные и оригиналы изображений. Её можно открыть или отправить как обычный каталог.\n\nДля переноса старого каталога выберите catalog.sqlite из его папки или старый резервный архив .histosets. Программа запишет новый файл, а исходник останется на месте.",
+            "A .histosets copy includes the data and original images. Open or share it like any other catalog.\n\nTo convert an older catalog, select its catalog.sqlite or an older .histosets backup. The app creates a new file and keeps the source in place.");
         if (statusFactory is not null) OperationStatus.Text = statusFactory();
         RefreshStatistics();
     }
@@ -83,7 +78,7 @@ public partial class CatalogWindow : Window
             await Task.Run(operation);
             ShowStatus(success);
             RefreshStatistics(refreshName: true);
-            if (select is not null) SelectedCatalogDirectory = select;
+            if (select is not null) SelectedCatalogPath = select;
         }
         catch (Exception ex)
         {
@@ -91,7 +86,7 @@ public partial class CatalogWindow : Window
             ShowStatus(() => T("Операция не завершена.\n", "The operation did not complete.\n") + UiLanguage.Error(ex));
         }
         finally { busy = false; Actions.IsEnabled = CloseButton.IsEnabled = true; NamePanel.IsEnabled = store is not null; }
-        if (SelectedCatalogDirectory is not null) Close();
+        if (SelectedCatalogPath is not null) Close();
     }
 
     private async void Rename_Click(object sender, RoutedEventArgs e)
@@ -103,72 +98,28 @@ public partial class CatalogWindow : Window
     private async void Backup_Click(object sender, RoutedEventArgs e)
     {
         if (store is null) return;
-        var dialog = new SaveFileDialog
-        {
-            Title = T("Сохранить резервную копию", "Save backup"),
-            Filter = T("Каталог HISTOSETS (*.histosets)|*.histosets", "HISTOSETS catalog (*.histosets)|*.histosets"),
-            FileName = "HISTOSETS-" + DateTime.Now.ToString("yyyy-MM-dd-HHmmss") + ".histosets", AddExtension = true
-        };
+        var dialog = HomeWindow.CatalogDestination("HISTOSETS-" + DateTime.Now.ToString("yyyy-MM-dd-HHmmss") + ".histosets",
+            T("Сохранить резервную копию", "Save a backup"));
         if (dialog.ShowDialog(this) == true)
-            await Run(() => store.CreateBackup(dialog.FileName), () => T("Резервная копия создана:\n", "Backup created:\n") + dialog.FileName);
+            await Run(() => store.CreateBackup(dialog.FileName), () => T("Копия создана:\n", "Copy created:\n") + dialog.FileName);
     }
-    private async void Restore_Click(object sender, RoutedEventArgs e)
+
+    private async void Convert_Click(object sender, RoutedEventArgs e)
     {
-        var file = new OpenFileDialog { Title = T("Выберите резервную копию", "Choose backup"), Filter = T("Каталог HISTOSETS (*.histosets)|*.histosets", "HISTOSETS catalog (*.histosets)|*.histosets") };
-        if (file.ShowDialog(this) != true) return;
-        var folder = new OpenFolderDialog { Title = T("Выберите пустую папку для восстановленного каталога", "Choose an empty folder for the restored catalog") };
-        if (folder.ShowDialog(this) != true) return;
-        await Run(() => CatalogStore.RestoreBackup(file.FileName, folder.FolderName), () => T("Каталог восстановлен.", "Catalog restored."), folder.FolderName);
-    }
-    private async void Open_Click(object sender, RoutedEventArgs e)
-    {
-        var folder = new OpenFolderDialog { Title = T("Выберите папку с catalog.sqlite", "Choose a folder containing catalog.sqlite") };
-        if (folder.ShowDialog(this) != true) return;
-        if (store is not null && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder.FolderName)),
-                Path.TrimEndingDirectorySeparator(store.RootDirectory), StringComparison.OrdinalIgnoreCase))
+        var input = new OpenFileDialog
         {
-            ShowStatus(() => T("Этот каталог уже открыт.", "This catalog is already open."));
-            return;
-        }
-        await Run(() =>
-        {
-            if (!File.Exists(Path.Combine(folder.FolderName, "catalog.sqlite")))
-                throw new IOException(T("В выбранной папке нет catalog.sqlite.", "The selected folder contains no catalog.sqlite."));
-            using var candidate = new CatalogStore(folder.FolderName);
-            candidate.Load();
-        }, () => T("Каталог открыт.", "Catalog opened."), folder.FolderName);
-    }
-    private OpenFileDialog XmlDialog() => new()
-    {
-        Title = T("Выберите исходный XML атласа", "Choose the source atlas XML"),
-        Filter = T("Каталог XML (*.xml)|*.xml", "XML catalog (*.xml)|*.xml"),
-        InitialDirectory = Path.Combine(sourceDirectory, "ATLAS")
-    };
-    private static string SourceRoot(string xml)
-    {
-        var directory = Path.GetDirectoryName(xml)!;
-        return string.Equals(Path.GetFileName(directory), "ATLAS", StringComparison.OrdinalIgnoreCase)
-            ? Path.GetDirectoryName(directory)! : directory;
-    }
-    private async void Create_Click(object sender, RoutedEventArgs e)
-    {
-        var file = XmlDialog();
-        if (file.ShowDialog(this) != true) return;
-        var folder = new OpenFolderDialog { Title = T("Выберите пустую папку для нового каталога", "Choose an empty folder for the new catalog") };
-        if (folder.ShowDialog(this) != true) return;
-        await Run(() => CatalogStore.CreateFromLegacy(file.FileName, SourceRoot(file.FileName), folder.FolderName, ImageLoader.ReadMetadata),
-            () => T("Каталог создан.", "Catalog created."), folder.FolderName);
-    }
-    private async void Import_Click(object sender, RoutedEventArgs e)
-    {
-        if (store is null) return;
-        var file = XmlDialog();
-        if (file.ShowDialog(this) != true) return;
-        ImportResult? result = null;
-        await Run(() => result = store.ImportLegacy(file.FileName, SourceRoot(file.FileName), ImageLoader.ReadMetadata),
-            () => T("Проверка импорта завершена.", "Import check completed."));
-        if (result is not null) ShowStatus(() => result.AlreadyImported
-            ? T("Этот XML и изображения уже импортированы. Дубликаты не созданы.", "This XML and its images have already been imported. No duplicates were created.")
-            : T("Импорт выполнен. Закройте это окно, чтобы увидеть объекты.", "Import completed. Close this window to view the objects."));
+            Title = T("Выберите прежнюю базу или резервную копию", "Choose an older database or backup"),
+            Filter = T("Старый каталог (*.sqlite;*.histosets)|*.sqlite;*.histosets", "Older catalog (*.sqlite;*.histosets)|*.sqlite;*.histosets")
+        };
+        var previous = CatalogLocation.LoadSaved();
+        if (previous is not null && Directory.Exists(previous)) input.InitialDirectory = previous;
+        else if (Directory.Exists(CatalogLocation.DefaultDirectory)) input.InitialDirectory = CatalogLocation.DefaultDirectory;
+        if (input.ShowDialog(this) != true) return;
+        var name = Path.GetFileNameWithoutExtension(input.FileName);
+        var destination = HomeWindow.CatalogDestination(name + ".converted.histosets",
+            T("Сохранить перенесённый каталог", "Save the converted catalog"));
+        if (destination.ShowDialog(this) != true) return;
+        await Run(() => CatalogStore.ConvertLegacyCatalog(input.FileName, destination.FileName),
+            () => T("Каталог перенесён.", "Catalog converted."), destination.FileName);
     }
 }

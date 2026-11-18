@@ -8,22 +8,20 @@ using Microsoft.Win32;
 
 namespace HistOSets;
 
-public partial class HomeWindow : Window
+public partial class HomeWindow : HistOSets.Controls.WorkAreaWindow
 {
-    private readonly string sourceDirectory;
     private readonly bool rememberLocation;
     private readonly string? requestedCatalog;
     private CatalogStore? store;
     private bool busy;
     private bool closed;
     private Func<string>? statusFactory;
-    public string? SelectedCatalogDirectory => store?.RootDirectory;
+    public string? SelectedCatalogPath => store?.DatabasePath;
 
-    public HomeWindow(string? sourceDirectory = null, string? catalogDirectory = null, bool rememberLocation = true)
+    public HomeWindow(string? catalogPath = null, bool rememberLocation = true)
     {
-        this.sourceDirectory = Path.GetFullPath(sourceDirectory ?? AppContext.BaseDirectory);
         this.rememberLocation = rememberLocation;
-        requestedCatalog = catalogDirectory;
+        requestedCatalog = catalogPath;
         InitializeComponent();
         UiLanguage.Changed += Language_Changed;
         ApplyLanguage();
@@ -37,14 +35,14 @@ public partial class HomeWindow : Window
         Loaded -= Home_Loaded;
         try
         {
-            var directory = requestedCatalog;
-            if (directory is null)
-            {
-                directory = CatalogLocation.LoadSaved();
-                if (directory is null && File.Exists(Path.Combine(CatalogLocation.DefaultDirectory, "catalog.sqlite")))
-                    directory = CatalogLocation.DefaultDirectory;
-            }
-            if (!string.IsNullOrWhiteSpace(directory)) await OpenExisting(directory);
+            var path = requestedCatalog ?? (rememberLocation ? CatalogLocation.LoadSaved() : null);
+            if (path is null && rememberLocation && File.Exists(Path.Combine(CatalogLocation.DefaultDirectory, "catalog.sqlite")))
+                path = CatalogLocation.DefaultDirectory;
+            if (string.IsNullOrWhiteSpace(path)) return;
+            if (Directory.Exists(path) || string.Equals(Path.GetExtension(path), ".sqlite", StringComparison.OrdinalIgnoreCase))
+                ShowStatus(() => T("Найден старый каталог. Чтобы создать файл .histosets, откройте «Управление каталогами» и выберите «Перенести старый каталог…».\n",
+                    "An old catalog was found. To create a .histosets file, open Catalog management and select Convert an older catalog.\n") + path);
+            else await OpenCatalogAsync(path);
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -52,16 +50,15 @@ public partial class HomeWindow : Window
     private void Language_Changed(object? sender, EventArgs e) => ApplyLanguage();
     private void ApplyLanguage()
     {
-        ChooseButton.Content = T("Выбрать базу данных…", "Choose database…");
-        FolderButton.Content = T("Выбрать папку…", "Choose folder…");
-        CreateButton.Content = T("Создать пустую базу данных…", "Create empty database…");
+        ChooseButton.Content = T("Открыть каталог .histosets…", "Open .histosets catalog…");
+        CreateButton.Content = T("Создать каталог…", "Create catalog…");
         ViewButton.Content = T("Просмотр", "View");
         SelfTestButton.Content = T("Самопроверка…", "Self-test…");
         EditButton.Content = T("Редактирование", "Edit");
         ExchangeButton.Content = T("Обмен материалами…", "Exchange materials…");
-        ManageButton.Content = T("Управление базой и резервные копии…", "Database management and backups…");
-        DemoButton.Content = T("Создать учебную демонстрационную базу…", "Create demonstration database…");
-        VersionLabel.Text = T("Интерактивный атлас · update7.3 · 0.7.3", "Interactive atlas · update7.3 · 0.7.3");
+        ManageButton.Content = T("Управление каталогами…", "Catalog management…");
+        DemoButton.Content = T("Создать копию демонстрационного каталога…", "Create a copy of the demo catalog…");
+        VersionLabel.Text = T("Интерактивный атлас · update8 · 0.8.0", "Interactive atlas · update8 · 0.8.0");
         LanguageButton.ToolTip = T("Переключить интерфейс и данные на английский", "Switch interface and content to Russian");
         if (statusFactory is not null) StatusText.Text = statusFactory();
         RefreshSummary();
@@ -88,7 +85,7 @@ public partial class HomeWindow : Window
             CatalogStatistics.Text = T("Объектов: ", "Objects: ") + statistics.Materials;
             CatalogModified.Text = T("Последнее изменение: ", "Last changed: ") + metadata.ModifiedUtc.ToLocalTime()
                 .ToString("g", CultureInfo.GetCultureInfo(UiLanguage.Locale == "en" ? "en-US" : "ru-RU"));
-            CatalogPath.Text = store.RootDirectory;
+            CatalogPath.Text = store.DatabasePath;
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -119,7 +116,7 @@ public partial class HomeWindow : Window
             candidate = await Task.Run(() =>
             {
                 var result = open();
-                try { result.Load(); result.GetMetadata(); return result; }
+                try { result.GetMetadata(); return result; }
                 catch { result.Dispose(); throw; }
             });
             if (closed) return;
@@ -128,13 +125,10 @@ public partial class HomeWindow : Window
             candidate = null;
             previous?.Dispose();
             RefreshSummary();
-            var migrationBackup = store.LastMigrationBackupPath;
-            ShowStatus(() => migrationBackup is not null
-                ? T("База обновлена. Резервная копия предыдущей версии:\n", "Database upgraded. Backup of the previous version:\n") + migrationBackup
-                : T("База данных готова к просмотру.", "The database is ready to view."));
+            ShowStatus(() => T("Каталог открыт.", "Catalog opened."));
             if (rememberLocation)
             {
-                try { CatalogLocation.Save(store.RootDirectory); }
+                try { CatalogLocation.Save(store.DatabasePath); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     ErrorLog.Write(ex);
@@ -146,75 +140,74 @@ public partial class HomeWindow : Window
         finally { candidate?.Dispose(); busy = false; Actions.IsEnabled = LanguageButton.IsEnabled = true; }
     }
 
-    private async Task OpenExisting(string directory)
+    public async Task OpenCatalogAsync(string path)
     {
-        directory = Path.GetFullPath(directory);
-        if (store is not null && string.Equals(Path.TrimEndingDirectorySeparator(directory), Path.TrimEndingDirectorySeparator(store.RootDirectory), StringComparison.OrdinalIgnoreCase))
+        path = Path.GetFullPath(path);
+        if (store is not null && string.Equals(path, store.DatabasePath, StringComparison.OrdinalIgnoreCase))
         {
             RefreshSummary();
-            ShowStatus(() => T("Эта база уже выбрана.", "This database is already selected."));
+            ShowStatus(() => T("Этот каталог уже открыт.", "This catalog is already open."));
             return;
         }
-        await InstallSelection(() =>
-        {
-            if (!File.Exists(Path.Combine(directory, "catalog.sqlite")))
-                throw new IOException(T("В выбранной папке нет catalog.sqlite. Найдите базу или восстановите резервную копию; новая база автоматически не создаётся.",
-                    "The selected folder contains no catalog.sqlite. Locate the database or restore a backup; it will not be recreated automatically."));
-            return new CatalogStore(directory);
-        });
+        await InstallSelection(() => new CatalogStore(path));
     }
+
+    internal static string CatalogFilter => T("Каталог HISTOSETS (*.histosets)|*.histosets", "HISTOSETS catalog (*.histosets)|*.histosets");
+
+    internal static SaveFileDialog CatalogDestination(string name, string title) => new()
+    {
+        Title = title, Filter = CatalogFilter, FileName = name, DefaultExt = ".histosets",
+        AddExtension = true, OverwritePrompt = false
+    };
 
     private async void Choose_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog
+        var dialog = new OpenFileDialog { Title = T("Открыть каталог", "Open catalog"), Filter = CatalogFilter, CheckFileExists = true };
+        if (dialog.ShowDialog(this) != true) return;
+        try
         {
-            Title = T("Выберите catalog.sqlite", "Choose catalog.sqlite"),
-            Filter = T("База HISTOSETS (catalog.sqlite)|catalog.sqlite", "HISTOSETS database (catalog.sqlite)|catalog.sqlite"),
-            CheckFileExists = true
-        };
-        if (dialog.ShowDialog(this) == true) await OpenExisting(Path.GetDirectoryName(dialog.FileName)!);
-    }
-    private async void Folder_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFolderDialog { Title = T("Выберите папку базы с catalog.sqlite", "Choose a database folder containing catalog.sqlite") };
-        if (dialog.ShowDialog(this) == true) await OpenExisting(dialog.FolderName);
-    }
-    private async void Create_Click(object sender, RoutedEventArgs e)
-    {
-        var folder = new OpenFolderDialog { Title = T("Выберите пустую папку для новой базы", "Choose an empty folder for the new database") };
-        if (folder.ShowDialog(this) != true) return;
-        var name = new CatalogNameDialog(Path.GetFileName(folder.FolderName)) { Owner = this };
-        if (name.ShowDialog() != true) return;
-        await CreateEmptyCatalogAsync(folder.FolderName, name.CatalogName);
+            if (!CatalogStore.IsNativeCatalog(dialog.FileName) && LooksLikeZip(dialog.FileName))
+            {
+                var target = CatalogDestination(Path.GetFileNameWithoutExtension(dialog.FileName) + ".converted.histosets",
+                    T("Куда перенести старый каталог?", "Where should the converted catalog be saved?"));
+                if (target.ShowDialog(this) == true)
+                    await InstallSelection(() => { CatalogStore.ConvertLegacyCatalog(dialog.FileName, target.FileName); return new CatalogStore(target.FileName); });
+                return;
+            }
+            await OpenCatalogAsync(dialog.FileName);
+        }
+        catch (Exception ex) { ShowError(ex); }
     }
 
-    private Task CreateEmptyCatalogAsync(string directory, string name)
+    private static bool LooksLikeZip(string path)
     {
-        return InstallSelection(() =>
-        {
-            RequireEmpty(directory);
-            var result = new CatalogStore(directory);
-            try { result.RenameCatalog(name); return result; }
-            catch { result.Dispose(); throw; }
-        });
+        using var stream = File.OpenRead(path);
+        return stream.ReadByte() == 'P' && stream.ReadByte() == 'K';
     }
-    private static void RequireEmpty(string directory)
+
+    private async void Create_Click(object sender, RoutedEventArgs e)
     {
-        if (Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any())
-            throw new IOException(T("Выберите пустую папку. Существующие файлы сохранены.", "Choose an empty folder. Existing files have been preserved."));
-        if (File.Exists(directory)) throw new IOException(T("Вместо папки выбран файл.", "The selected path is a file, not a folder."));
+        var file = CatalogDestination("Atlas.histosets", T("Новый каталог HISTOSETS", "New HISTOSETS catalog"));
+        if (file.ShowDialog(this) != true) return;
+        var name = new CatalogNameDialog(Path.GetFileNameWithoutExtension(file.FileName)) { Owner = this };
+        if (name.ShowDialog() != true) return;
+        await CreateEmptyCatalogAsync(file.FileName, name.CatalogName);
     }
+
+    private Task CreateEmptyCatalogAsync(string path, string name) => InstallSelection(() =>
+    {
+        CatalogStore.CreateCatalog(path, name);
+        return new CatalogStore(path);
+    });
+
     private async void Demo_Click(object sender, RoutedEventArgs e)
     {
-        var folder = new OpenFolderDialog { Title = T("Выберите пустую папку для демонстрационной базы", "Choose an empty folder for the demonstration database") };
-        if (folder.ShowDialog(this) != true) return;
+        var file = CatalogDestination("Demo.histosets", T("Сохранить демонстрационный каталог", "Save demo catalog"));
+        if (file.ShowDialog(this) != true) return;
         await InstallSelection(() =>
         {
-            RequireEmpty(folder.FolderName);
-            CatalogStore.CreateFromLegacy(Path.Combine(sourceDirectory, "ATLAS", "ATLAS.xml"), sourceDirectory, folder.FolderName, ImageLoader.ReadMetadata);
-            var result = new CatalogStore(folder.FolderName);
-            try { result.RenameCatalog(T("Демонстрационный атлас HISTOSETS", "HISTOSETS demonstration atlas")); return result; }
-            catch { result.Dispose(); throw; }
+            CatalogStore.CopyCatalog(Path.Combine(AppContext.BaseDirectory, "Demo.histosets"), file.FileName);
+            return new CatalogStore(file.FileName);
         });
     }
     private void View_Click(object sender, RoutedEventArgs e)
@@ -233,9 +226,9 @@ public partial class HomeWindow : Window
     }
     private async void Manage_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new CatalogWindow(store, store?.RootDirectory ?? "", sourceDirectory) { Owner = this };
+        var dialog = new CatalogWindow(store) { Owner = this };
         dialog.ShowDialog();
-        if (dialog.SelectedCatalogDirectory is { } selected) await OpenExisting(selected);
+        if (dialog.SelectedCatalogPath is { } selected) await OpenCatalogAsync(selected);
         else RefreshSummary();
     }
     private void Exchange_Click(object sender, RoutedEventArgs e)
@@ -258,7 +251,7 @@ public partial class HomeWindow : Window
     }
 }
 
-internal sealed class CatalogNameDialog : Window
+internal sealed class CatalogNameDialog : HistOSets.Controls.WorkAreaWindow
 {
     private readonly TextBox name;
     public string CatalogName => name.Text.Trim();

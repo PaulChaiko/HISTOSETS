@@ -17,7 +17,7 @@ namespace HistOSets
     /// <summary>
     /// Логика взаимодействия для LogoWindow.xaml
     /// </summary>
-    public partial class LogoWindow : Window
+    public partial class LogoWindow : HistOSets.Controls.WorkAreaWindow
     {
         public LogoWindow()
         {

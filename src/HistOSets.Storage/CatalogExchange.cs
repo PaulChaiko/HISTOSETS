@@ -37,10 +37,12 @@ public sealed partial class CatalogStore
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed,this);
-            package.VerifyFiles();
+            package.ThrowIfDisposed();
+            if (string.Equals(DatabasePath, package.SourcePath, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new CatalogStorageException("Этот каталог уже открыт. Выберите другой файл для объединения.");
             using var connection = Open(DatabasePath);
             Validate(connection);
-            _ = ReferencedFiles(connection,RootDirectory);
+            VerifyImageContents(connection);
             return BuildExchangePreview(connection,null,package,locale);
         }
     }
@@ -63,7 +65,7 @@ public sealed partial class CatalogStore
             var localHash = previous is null ? null : ExchangeEntityFingerprint(previous,local);
             var divergentAncestor = false;
             ExchangeChangeKind status;
-            if (localHash == incomingHash || package.FormatVersion == 1 && previous is not null && ExchangeContentsEqual(previous, local, entity, package)) status = ExchangeChangeKind.Unchanged;
+            if (localHash == incomingHash) status = ExchangeChangeKind.Unchanged;
             else if (entity.Root.String("deleted_utc") is not null) status = ExchangeChangeKind.Deletion;
             else if (previous is null) status = ExchangeChangeKind.Add;
             else if (!baselines.TryGetValue(entity.Key,out var baseline)) status = ExchangeChangeKind.Conflict;
@@ -74,9 +76,8 @@ public sealed partial class CatalogStore
                 // A content change at an old/equal source revision is never a safe fast-forward.
                 // Fingerprints still decide equality and divergence; counters only veto a stale update.
                 var staleSource = entity.Root.Integer("revision") <= baseline.SourceRevision;
-                // A legacy import can preserve local descriptions absent from its source graph.
-                // A later format2 package must not treat that divergent state as consent to erase them.
-                divergentAncestor = entity.Kind == ExchangeEntityKind.Material && package.FormatVersion >= 2 &&
+                // A divergent acknowledgment is not permission to replace different local content.
+                divergentAncestor = entity.Kind == ExchangeEntityKind.Material &&
                     baseline.SourceFingerprint != baseline.LocalFingerprint;
                 status = sourceChanged ? (localChanged || staleSource || divergentAncestor ? ExchangeChangeKind.Conflict : ExchangeChangeKind.Update) : ExchangeChangeKind.LocalChanged;
             }
@@ -91,10 +92,6 @@ public sealed partial class CatalogStore
             if (status == ExchangeChangeKind.Deletion)
                 warning += (warning.Length == 0 ? "" : " ") + T("Пакет содержит удаление. Оно применяется только после явного выбора; используемый справочник удалить нельзя.",
                     "The package contains a deletion. It requires an explicit choice; a shared entry still in use cannot be deleted.");
-            if (entity.Kind == ExchangeEntityKind.Material && package.FormatVersion == 1)
-                warning += (warning.Length == 0 ? "" : " ") + T(
-                    "Пакет формата 1 не содержит учебных описаний. Описания сохранятся у остающихся объектов и элементов; удаление владельца удалит и его описания.",
-                    "Format 1 packages do not contain training descriptions. Descriptions of retained objects and elements are preserved; deleting an owner also deletes its descriptions.");
             var resolution = status switch
             {
                 ExchangeChangeKind.Conflict or ExchangeChangeKind.Deletion => ExchangeResolution.Unresolved,
@@ -185,9 +182,9 @@ public sealed partial class CatalogStore
 
     private static bool ExchangeContentsEqual(ExchangeEntity local, IReadOnlyDictionary<string,IReadOnlyList<ExchangeRow>> localTables,
         ExchangeEntity incoming, ExchangePackage package) =>
-        ExchangeEntityFingerprint(local, localTables, package.FormatVersion >= 2) == ExchangeEntityFingerprint(incoming, package.Tables, package.FormatVersion >= 2);
+        ExchangeEntityFingerprint(local, localTables) == ExchangeEntityFingerprint(incoming, package.Tables);
 
-    private static string ExchangeEntityFingerprint(ExchangeEntity entity,IReadOnlyDictionary<string,IReadOnlyList<ExchangeRow>> tables, bool includeTraining = true)
+    private static string ExchangeEntityFingerprint(ExchangeEntity entity,IReadOnlyDictionary<string,IReadOnlyList<ExchangeRow>> tables)
     {
         if(entity.Root.String("deleted_utc") is not null) return ExchangeHash(new[]{entity.Key,"deleted"});
         var images = tables["images"].ToDictionary(r=>r.Id,StringComparer.Ordinal);
@@ -195,8 +192,8 @@ public sealed partial class CatalogStore
         var parts = new List<object>();
         foreach(var (table,rows) in entity.Rows.OrderBy(p=>p.Key,StringComparer.Ordinal))
         {
-            // Empty training tables retain update6 baseline hashes. Legacy packages cannot express changes to these fields.
-            if (ExchangeSchema.IsTrainingTable(table) && (!includeTraining || rows.All(r => r.String("deleted_utc") is not null))) continue;
+            // Keep baseline hashes stable when there are no active training descriptions.
+            if (ExchangeSchema.IsTrainingTable(table) && rows.All(r => r.String("deleted_utc") is not null)) continue;
             var normalized = new List<string>();
             foreach(var row in rows.Where(r=>r.String("deleted_utc") is null))
             {

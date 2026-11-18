@@ -183,18 +183,22 @@ public sealed partial class CatalogStore
         });
     }
 
-    private void AddFileIssues(SqliteConnection connection, SqliteTransaction? transaction, Guid materialId, List<string> issues)
+    private static void AddFileIssues(SqliteConnection connection, SqliteTransaction? transaction, Guid materialId, List<string> issues)
     {
         using var command = Command(connection, """
-            SELECT i.storage_key,i.sha256,i.byte_size FROM material_images mi JOIN images i ON i.id=mi.image_id
+            SELECT i.id,i.sha256 FROM material_images mi JOIN images i ON i.id=mi.image_id
             WHERE mi.material_id=$id AND mi.deleted_utc IS NULL AND i.deleted_utc IS NULL;
             """, transaction, ("$id", materialId.ToString()));
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            var path = StorageFiles.Resolve(RootDirectory, reader.GetString(0));
-            if (!File.Exists(path) || new FileInfo(path).Length != reader.GetInt64(2) || StorageFiles.Hash(path) != reader.GetString(1))
-                issues.Add("Изображение отсутствует или изменено: " + reader.GetString(0));
+            try
+            {
+                using var original = ReadImageContent(connection, transaction, reader.GetString(0));
+                if (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(original)) != reader.GetString(1))
+                    issues.Add("Оригинал изображения повреждён.");
+            }
+            catch (CatalogStorageException ex) { issues.Add(ex.Message); }
         }
     }
 
@@ -226,7 +230,7 @@ public sealed partial class CatalogStore
         if (Convert.ToInt64(Scalar(connection, """
             SELECT COUNT(*) FROM material_images mi JOIN images i ON i.id=mi.image_id AND i.deleted_utc IS NULL
             WHERE mi.material_id=$id AND mi.deleted_utc IS NULL AND mi.is_primary=1;
-            """, transaction, ("$id", material))) != 1) issues.Add("Выберите основное изображение.");
+            """, transaction, ("$id", material))) != 1) issues.Add("Выберите изображение.");
         void Texts(string table, string parent, string id, string label, bool descriptions)
         {
             foreach (var locale in new[] { "ru", "en" })

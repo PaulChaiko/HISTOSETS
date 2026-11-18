@@ -1,0 +1,45 @@
+<controls:WorkAreaWindow x:Class="HistOSets.TagFiltersWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:HistOSets.Controls"
+        Width="560" Height="520" MinWidth="375" MinHeight="300"
+        WindowStartupLocation="CenterOwner" FontFamily="Segoe UI" FontSize="14">
+    <Grid Margin="16">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel Margin="0,0,0,10">
+            <TextBlock x:Name="FilterRule" TextWrapping="Wrap" Margin="0,0,0,10" Foreground="#60576F"/>
+            <TextBlock x:Name="TypeLabel" Margin="0,0,0,4"/>
+            <ComboBox x:Name="TypeSelector" DisplayMemberPath="Label" SelectionChanged="Filters_Changed" Padding="6" Margin="0,0,0,8"
+                      AutomationProperties.LabeledBy="{Binding ElementName=TypeLabel}"/>
+            <TextBlock x:Name="TagSearchLabel" Margin="0,0,0,4"/>
+            <TextBox x:Name="TagSearchBox" TextChanged="Filters_Changed" AutomationProperties.LabeledBy="{Binding ElementName=TagSearchLabel}"/>
+        </StackPanel>
+        <Grid Grid.Row="1">
+            <ListBox x:Name="TagList" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <CheckBox Margin="4" IsChecked="{Binding Selected, Mode=TwoWay}" AutomationProperties.Name="{Binding Label}">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding Detail}" TextWrapping="Wrap" Foreground="#60576F" FontSize="12"/>
+                            </StackPanel>
+                        </CheckBox>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock x:Name="NoTags" TextWrapping="Wrap" Visibility="Collapsed" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" IsHitTestVisible="False" Margin="12"/>
+        </Grid>
+        <StackPanel Grid.Row="2" Margin="0,10,0,0">
+            <TextBlock x:Name="SelectionSummary" Margin="0,0,0,6" TextWrapping="Wrap"/>
+            <WrapPanel>
+                <Button x:Name="ClearButton" Click="Clear_Click"/>
+                <Button x:Name="ApplyButton" IsDefault="True" Click="Apply_Click"/>
+                <Button x:Name="CancelButton" IsCancel="True"/>
+            </WrapPanel>
+        </StackPanel>
+    </Grid>
+</controls:WorkAreaWindow>

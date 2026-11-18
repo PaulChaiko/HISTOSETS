@@ -1,6 +1,7 @@
-<Window x:Class="HistOSets.CatalogWindow"
+<fit:WorkAreaWindow x:Class="HistOSets.CatalogWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:fit="clr-namespace:HistOSets.Controls"
         Title="Данные атласа — HISTOSETS" Width="770" Height="700" MinWidth="660" MinHeight="620"
         Background="{StaticResource BrandBackgroundBrush}" FontFamily="Segoe UI" FontSize="14"
         WindowStartupLocation="CenterOwner">
@@ -21,10 +22,7 @@
         </Grid>
         <WrapPanel x:Name="Actions" Grid.Row="4">
             <Button x:Name="BackupButton" Click="Backup_Click" Margin="0,0,8,8"/>
-            <Button x:Name="RestoreButton" Click="Restore_Click" Margin="0,0,8,8"/>
-            <Button x:Name="OpenButton" Click="Open_Click" Margin="0,0,8,8"/>
-            <Button x:Name="CreateXmlButton" Click="Create_Click" Margin="0,0,8,8"/>
-            <Button x:Name="ImportButton" Click="Import_Click" Margin="0,0,8,8"/>
+            <Button x:Name="ConvertButton" Click="Convert_Click" Margin="0,0,8,8"/>
         </WrapPanel>
         <ScrollViewer Grid.Row="5" VerticalScrollBarVisibility="Auto" Margin="0,8,0,12">
             <StackPanel>
@@ -37,4 +35,4 @@
         </ScrollViewer>
         <Button x:Name="CloseButton" Grid.Row="7" HorizontalAlignment="Right" IsCancel="True" MinWidth="100"/>
     </Grid>
-</Window>
+</fit:WorkAreaWindow>

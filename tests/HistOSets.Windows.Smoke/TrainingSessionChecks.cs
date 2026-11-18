@@ -9,12 +9,14 @@ using HistOSets.Controls;
 using HistOSets.Core;
 using HistOSets.Services;
 using HistOSets.Storage;
+using Microsoft.Data.Sqlite;
 
 internal static partial class Program
 {
     private static void CheckTrainingSessions(string temp, string output)
     {
-        var root = Path.Combine(temp, "training-session-catalog");
+        var root = Path.Combine(temp, "training-session-catalog.histosets");
+        CatalogStore.CreateCatalog(root, "Recognition fixture");
         using var store = new CatalogStore(root);
         var ids = CreateSessionCatalog(store, temp);
         var setup = new TrainingSetupWindow(store);
@@ -83,12 +85,12 @@ internal static partial class Program
             var catalog = store.CaptureTrainingCatalog(ImageLoader.ReadMetadata);
             var plan = TrainingPlanner.Build(catalog, new([ids[0]], [TrainingMethod.NameObjectImage], "en"));
             var picture = catalog.Materials.Single(m => m.Id == ids[0]).Images.Single();
-            var path = picture.ImagePath ?? throw new Exception("Missing fixture image path");
-            var original = File.ReadAllBytes(path);
+            var original = ReadTrainingImage(store, picture.ImageId);
             try
             {
-                CreateSessionImage(path, 420, 280, 17);
-                WithSession(catalog, plan, session =>
+                WriteTrainingImage(root, picture.ImageId, new byte[original.Length]);
+                var broken = SessionCatalogBytes(root);
+                WithSession(store, catalog, plan, session =>
                 {
                     Check(session.Session.CurrentResult?.Outcome == TrainingOutcome.Unavailable
                         && session.Session.Summary.Answered == 0 && session.Session.Summary.Incorrect == 0
@@ -100,10 +102,10 @@ internal static partial class Program
                         && ((TextBlock)session.FindName("ResultsSummary")).Text.Contains("not calculated", StringComparison.OrdinalIgnoreCase),
                         "A technically unavailable question is counted separately and visibly excluded from the answer denominator");
                 });
+                Check(SessionCatalogBytes(root) == broken,
+                    "Image failure handling does not change the catalog or replace its damaged original");
             }
-            finally { File.WriteAllBytes(path, original); }
-            Check(SessionCatalogBytes(root) == unchanged,
-                "Image failure handling writes no catalog data and never replaces or repairs the source image");
+            finally { WriteTrainingImage(root, picture.ImageId, original); }
         }
         catch { if (setup.IsVisible) SaveScreenshot(setup, Path.Combine(output, "native-session-setup-failure.png")); throw; }
         finally
@@ -184,6 +186,11 @@ internal static partial class Program
         edit.Text = "сеть"; Pump();
         Check(selector.Items.Count == 1 && ((TrainingAnswer)selector.Items[0]).Key == first.Answer.Key,
             "Typing a name fragment filters the answer dropdown to matching canonical choices");
+        edit.Text = "Сосудистые сети"; Pump();
+        session.CheckAnswer();
+        Check(selector.Items.Count == 1 && ((TrainingAnswer)selector.Items[0]).Key == first.Answer.Key
+            && state.Results.Count == 0 && !((Button)session.FindName("CheckAnswerButton")).IsEnabled,
+            "Inflected words suggest the canonical answer but cannot be submitted without selecting it");
         selector.SelectedItem = selector.Items[0]; Pump();
         Check(selector.SelectedItem is TrainingAnswer selected && selected.Key == first.Answer.Key
             && ((Button)session.FindName("CheckAnswerButton")).IsEnabled,
@@ -247,6 +254,9 @@ internal static partial class Program
             && ((FrameworkElement)session.FindName("ResultsPanel")).IsVisible
             && ((TextBlock)session.FindName("ResultsSummary")).Text.Contains("3 из 4", StringComparison.Ordinal),
             "Final results distinguish correct, incorrect and skipped outcomes and visibly calculate accuracy over four answered questions only");
+        CheckResultRowColor(session, 0, Color.FromRgb(249, 230, 230));
+        CheckResultRowColor(session, 1, Color.FromRgb(229, 243, 232));
+        CheckResultRowColor(session, 2, Color.FromRgb(255, 247, 216));
         CompleteSessionTask(session, session.ReviewQuestionAsync(0));
         Check(((TextBlock)session.FindName("ReviewAnswerText")).Text.Contains(first.Answer.Name, StringComparison.Ordinal)
             && ((TrainingImageView)session.FindName("ReviewImageView")).Surface.ImageSource is not null,
@@ -261,7 +271,7 @@ internal static partial class Program
         Check(state.Plan.Configuration.Locale == "en" && state.CurrentQuestion?.Answer.Name == "Vascular network",
             "English execution uses its prepared answer names and descriptions");
         var frozenHeading = ((TextBlock)session.FindName("QuestionHeading")).Text;
-        var languageHost = new HomeWindow(sourceDirectory: null, catalogDirectory: "", rememberLocation: false); languageHost.Show(); Pump();
+        var languageHost = new HomeWindow(catalogPath: "", rememberLocation: false); languageHost.Show(); Pump();
         try
         {
             Click(languageHost, "LanguageButton"); Pump();
@@ -291,12 +301,20 @@ internal static partial class Program
     private static void CheckRegionSessionView(TrainingSessionWindow session)
     {
         var question = session.Session.CurrentQuestion!;
-        var surface = ((TrainingImageView)session.FindName("MainImageView")).Surface;
+        var view = (TrainingImageView)session.FindName("MainImageView");
+        var surface = view.Surface;
         var original = question.Regions.Select(r => RegionGeometryCodec.Serialize(r.Geometry)).ToArray();
         Check(question.Method == TrainingMethod.NameElementRegion && surface.Regions.Count == 2
             && surface.Regions.Select(r => RegionGeometryCodec.Serialize(r.Geometry)).SequenceEqual(original)
             && !VisibleSessionText(session).Contains(question.Answer.Name, StringComparison.Ordinal),
             "Element recognition displays all saved regions including the compound hole, without exposing the element name");
+        var toggle = (CheckBox)view.FindName("TrainingRegionOverlayCheckBox");
+        var hue = (Slider)view.FindName("TrainingRegionHueSlider");
+        var previousBrush = surface.RegionStrokeBrush;
+        hue.Value += 60; toggle.IsChecked = false; Pump();
+        Check(hue.IsVisible && !surface.ShowRegions && surface.RegionStrokeBrush != previousBrush,
+            "Element recognition offers display-only visibility and hue controls");
+        toggle.IsChecked = true; hue.Value -= 60; Pump();
         surface.ActualSize(); var beforeZoom = surface.Zoom; surface.ZoomBy(1.25); Pump();
         Check(surface.Zoom > beforeZoom && !surface.CanEdit && surface.Tool == RegionEditorTool.Pan,
             "The native learner image supports zoom and pan with editing disabled");
@@ -327,9 +345,9 @@ internal static partial class Program
             "The preparation screen launches a real modal session and becomes usable again after its results close");
     }
 
-    private static void WithSession(TrainingCatalog catalog, TrainingPlan plan, Action<TrainingSessionWindow> action)
+    private static void WithSession(CatalogStore store, TrainingCatalog catalog, TrainingPlan plan, Action<TrainingSessionWindow> action)
     {
-        var session = new TrainingSessionWindow(catalog, plan); session.Show();
+        var session = new TrainingSessionWindow(store, catalog, plan); session.Show();
         try { CompleteSessionTask(session, session.InitializeAsync()); action(session); }
         finally { CloseSessionForCleanup(session); }
     }
@@ -378,14 +396,36 @@ internal static partial class Program
     private static string VisibleSessionText(Window session) => session.Title + "\n"
         + string.Join("\n", VisualChildren<TextBlock>(session).Where(t => t.IsVisible).Select(t => t.Text));
 
-    private static string SessionCatalogBytes(string root) => string.Join("\n", Directory.GetFiles(root, "*", SearchOption.AllDirectories)
-        .Order(StringComparer.Ordinal).Select(path =>
-        {
-            var relative = Path.GetRelativePath(root, path);
-            // CatalogStore owns this runtime lock with FileShare.None. Keep its presence in the
-            // inventory, but hash every other file, including SQLite, images and metadata.
-            return relative + ":" + (relative == "catalog.lock" ? "<exclusive runtime lock>" : HashExchangeFile(path));
-        }));
+    private static string SessionCatalogBytes(string path) => HashExchangeFile(path);
+
+    private static void CheckResultRowColor(TrainingSessionWindow session, int index, Color expected)
+    {
+        var list = (ListBox)session.FindName("ResultsList");
+        list.ScrollIntoView(list.Items[index]); Pump();
+        var row = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(index);
+        Check(VisualChildren<Border>(row).Any(border => border.IsVisible && border.Background is SolidColorBrush brush && brush.Color == expected),
+            "The visible result row has its outcome background: " + index);
+    }
+
+    private static byte[] ReadTrainingImage(CatalogStore store, Guid imageId)
+    {
+        using var stream = store.OpenImage(imageId);
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return bytes.ToArray();
+    }
+
+    private static void WriteTrainingImage(string path, Guid imageId, byte[]? bytes)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.Parameters.AddWithValue("$id", imageId.ToString());
+        command.CommandText = bytes is null ? "DELETE FROM image_contents WHERE image_id=$id;"
+            : "INSERT INTO image_contents(image_id,data) VALUES($id,$data) ON CONFLICT(image_id) DO UPDATE SET data=excluded.data;";
+        if (bytes is not null) command.Parameters.Add("$data", SqliteType.Blob).Value = bytes;
+        command.ExecuteNonQuery();
+    }
 
     private static void CreateSessionImage(string path, int width, int height, int variant)
     {

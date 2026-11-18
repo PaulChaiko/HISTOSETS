@@ -14,7 +14,7 @@ using Microsoft.Win32;
 namespace HistOSets;
 
 /// <summary>Review a selected subset before applying it to the borrowed catalog.</summary>
-public partial class ExchangeWindow : Window
+public partial class ExchangeWindow : HistOSets.Controls.WorkAreaWindow
 {
     private readonly CatalogStore store;
     private readonly List<ExportRow> exportRows = [];
@@ -68,23 +68,23 @@ public partial class ExchangeWindow : Window
         ExportTab.Header = T("Экспорт", "Export");
         ImportTab.Header = T("Импорт и объединение", "Import and merge");
         ExportHint.Text = T(
-            "Выберите объекты для передачи. Пакет включает их изображения, тексты, области, калибровку, теги и группы аналогов. Удалённые объекты добавляются только при явном выборе.",
-            "Select objects to share. The package includes their images, texts, regions, calibration, tags and analog groups. Deleted objects are included only when explicitly selected.");
+            "Выберите объекты для передачи. В новый каталог войдут оригиналы изображений, тексты, области, калибровка и связанные справочники. Удалённые объекты добавляются только при явном выборе.",
+            "Select objects to share. The new catalog contains their original images, texts, regions, calibration and related dictionaries. Deleted objects are included only when explicitly selected.");
         SearchLabel.Text = T("Поиск по названию или UUID", "Search by name or UUID");
         IncludeDeletedBox.Content = T("Показать удалённые", "Show deleted objects");
         IncludeDeletedBox.ToolTip = T("Выбранные удалённые объекты передают отметку об удалении. Импорт потребует отдельного решения.",
             "Selecting a deleted object transfers its deletion marker. Import requires an explicit decision.");
         SelectAllButton.Content = T("Выбрать показанные", "Select visible");
         ClearSelectionButton.Content = T("Снять выбор", "Clear selection");
-        ExportButton.Content = T("Сохранить пакет…", "Save package…");
-        ImportHint.Text = T("Откройте пакет, проверьте различия и выберите действия. Предварительный просмотр не изменяет базу.",
-            "Open a package, review the differences and choose actions. Preview does not change the database.");
-        LoadPackageButton.Content = T("Открыть пакет…", "Open package…");
+        ExportButton.Content = T("Сохранить выбранное…", "Save selected…");
+        ImportHint.Text = T("Откройте каталог .histosets, проверьте различия и выберите действия. Предварительный просмотр не изменяет базу.",
+            "Open a .histosets catalog, review the differences and choose actions. Preview does not change the database.");
+        LoadPackageButton.Content = T("Выбрать каталог…", "Choose catalog…");
         ObjectColumn.Header = T("Объект / справочник", "Object / dictionary");
         ChangeColumn.Header = T("Различие", "Change");
         DecisionColumn.Header = T("Решение", "Decision");
         LocalHeading.Text = T("В текущей базе", "In the current database");
-        IncomingHeading.Text = T("В пакете", "In the package");
+        IncomingHeading.Text = T("Во входящем каталоге", "In the incoming catalog");
         ComparisonSplitter.ToolTip = T("Перетащите, чтобы увеличить область сравнения", "Drag to enlarge the comparison area");
         ApplyButton.Content = T("Применить выбранные действия", "Apply selected actions");
         CloseButton.Content = T("Закрыть", "Close");
@@ -139,11 +139,11 @@ public partial class ExchangeWindow : Window
         var ids = exportRows.Where(r => r.IsSelected).Select(r => r.Info.Id).ToArray();
         if (ids.Length == 0) return;
         SetBusy(true);
-        ShowStatus(() => T("Создание и проверка пакета…", "Creating and verifying the package…"));
+        ShowStatus(() => T("Создание каталога с выбранными объектами…", "Creating the catalog with selected objects…"));
         try
         {
             await Task.Run(() => store.ExportMaterials(path, ids));
-            ShowStatus(() => T($"Пакет сохранён. Объектов: {ids.Length}.\n", $"Package saved. Objects: {ids.Length}.\n") + Path.GetFullPath(path));
+            ShowStatus(() => T($"Каталог сохранён. Объектов: {ids.Length}.\n", $"Catalog saved. Objects: {ids.Length}.\n") + Path.GetFullPath(path));
         }
         catch (Exception ex) { ShowError(ex); }
         finally { SetBusy(false); }
@@ -155,7 +155,7 @@ public partial class ExchangeWindow : Window
         ExchangeTabs.SelectedItem = ImportTab;
         SetBusy(true);
         ClearPreview();
-        ShowStatus(() => T("Проверка пакета и сравнение с текущей базой…", "Verifying the package and comparing it with the current database…"));
+        ShowStatus(() => T("Проверка каталога и сравнение с текущей базой…", "Verifying the catalog and comparing it with the current database…"));
         ExchangePackage? candidate = null;
         try
         {
@@ -326,8 +326,8 @@ public partial class ExchangeWindow : Window
         if (!initialized) return;
         if (package is null)
         {
-            PackageLabel.Text = T("Пакет не выбран", "No package selected");
-            PackageDetailsLabel.Text = T("Формат: .histosets-exchange", "Format: .histosets-exchange");
+            PackageLabel.Text = T("Исходный каталог не выбран", "No source catalog selected");
+            PackageDetailsLabel.Text = T("Формат: .histosets", "Format: .histosets");
             PreviewWarningLabel.Text = "";
             return;
         }
@@ -366,7 +366,7 @@ public partial class ExchangeWindow : Window
         PreviewCountLabel.Text = Preview is null ? "" : T(
             $"Строк: {previewRows.Count} · конфликтов: {conflicts} · удалений: {deletions} · без решения: {unresolved}",
             $"Rows: {previewRows.Count} · conflicts: {conflicts} · deletions: {deletions} · unresolved: {unresolved}");
-        EmptyPreviewLabel.Text = T("Откройте пакет, чтобы увидеть план импорта.", "Open a package to see the import plan.");
+        EmptyPreviewLabel.Text = T("Выберите каталог, чтобы увидеть план объединения.", "Choose a catalog to see the merge plan.");
         EmptyPreviewLabel.Visibility = Preview is null ? Visibility.Visible : Visibility.Collapsed;
         ApplyButton.IsEnabled = !busy && Preview is not null && previewRows.Count > 0 && unresolved == 0;
         DecisionHint.Text = unresolved > 0
@@ -414,9 +414,9 @@ public partial class ExchangeWindow : Window
     {
         var dialog = new SaveFileDialog
         {
-            Title = T("Сохранить пакет обмена", "Save exchange package"),
-            Filter = T("Пакет обмена HISTOSETS (*.histosets-exchange)|*.histosets-exchange", "HISTOSETS exchange package (*.histosets-exchange)|*.histosets-exchange"),
-            DefaultExt = ".histosets-exchange", AddExtension = true, FileName = "materials-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture),
+            Title = T("Сохранить выбранные материалы", "Save selected materials"),
+            Filter = T("Каталог HISTOSETS (*.histosets)|*.histosets", "HISTOSETS catalog (*.histosets)|*.histosets"),
+            DefaultExt = ".histosets", AddExtension = true, FileName = "materials-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture),
             OverwritePrompt = false
         };
         if (dialog.ShowDialog(this) == true) await ExportSelectedToPathAsync(dialog.FileName);
@@ -425,8 +425,8 @@ public partial class ExchangeWindow : Window
     {
         var dialog = new OpenFileDialog
         {
-            Title = T("Открыть пакет обмена", "Open exchange package"),
-            Filter = T("Пакет обмена HISTOSETS (*.histosets-exchange)|*.histosets-exchange", "HISTOSETS exchange package (*.histosets-exchange)|*.histosets-exchange"),
+            Title = T("Выбрать исходный каталог", "Choose a source catalog"),
+            Filter = T("Каталог HISTOSETS (*.histosets)|*.histosets", "HISTOSETS catalog (*.histosets)|*.histosets"),
             CheckFileExists = true
         };
         if (dialog.ShowDialog(this) == true) await LoadPackagePathAsync(dialog.FileName);

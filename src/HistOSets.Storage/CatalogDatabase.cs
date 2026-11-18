@@ -7,7 +7,7 @@ namespace HistOSets.Storage;
 internal static class CatalogDatabase
 {
     internal const int ApplicationId = 0x48535453; // HSTS
-    internal const int Version = 6;
+    internal const int Version = 7;
 
     internal static SqliteConnection Open(string path, SqliteOpenMode mode = SqliteOpenMode.ReadOnly)
     {
@@ -27,6 +27,11 @@ internal static class CatalogDatabase
     internal static void Create(string path, string name)
     {
         using var connection = Open(path, SqliteOpenMode.ReadWriteCreate);
+        Create(connection, name);
+    }
+
+    internal static void Create(SqliteConnection connection, string name)
+    {
         using var transaction = connection.BeginTransaction();
         Execute(connection, Resource("Migrations.001_initial.sql"), transaction);
         Execute(connection, $"PRAGMA application_id = {ApplicationId}; PRAGMA user_version = 1;", transaction);
@@ -39,6 +44,7 @@ internal static class CatalogDatabase
         ApplyVersion4(connection, transaction);
         ApplyVersion5(connection, transaction);
         ApplyVersion6(connection, transaction);
+        CatalogStore.ApplyNativeSchema(connection, transaction);
         Validate(connection, transaction: transaction);
         transaction.Commit();
     }
@@ -80,14 +86,14 @@ internal static class CatalogDatabase
         Execute(connection, "INSERT INTO schema_migrations VALUES (2,$now); PRAGMA user_version = 2;", transaction, ("$now", now));
     }
 
-    internal static void Validate(SqliteConnection connection, bool allowLegacy = false, SqliteTransaction? transaction = null)
+    internal static void Validate(SqliteConnection connection, bool allowLegacy = false, SqliteTransaction? transaction = null, bool deep = false)
     {
         var appId = Convert.ToInt64(Scalar(connection, "PRAGMA application_id;", transaction));
         if (appId != ApplicationId) throw new CatalogStorageException("Выбранный файл не является базой HISTOSETS.");
         var version = Convert.ToInt64(Scalar(connection, "PRAGMA user_version;", transaction));
-        if (version != Version && !(allowLegacy && version is 1 or 2 or 3 or 4 or 5))
+        if (version != Version && !(allowLegacy && version is >= 1 and <= 6))
             throw new CatalogStorageException($"Версия базы {version} не поддерживается этой сборкой (ожидается {Version}). Файл не изменён.");
-        if (!Equals(Scalar(connection, "PRAGMA quick_check;", transaction), "ok"))
+        if ((version < Version || deep) && !Equals(Scalar(connection, "PRAGMA quick_check;", transaction), "ok"))
             throw new CatalogStorageException("Нарушена целостность SQLite. Восстановите резервную копию в другой каталог.");
         using (var command = Command(connection, "PRAGMA foreign_key_check;", transaction))
         using (var reader = command.ExecuteReader())
@@ -146,6 +152,17 @@ internal static class CatalogDatabase
                     !reader.GetString(2).All(Uri.IsHexDigit) || !reader.GetString(3).All(Uri.IsHexDigit))
                     throw new CatalogStorageException("Повреждена история обмена каталогами.");
         }
+        if (version == Version && Convert.ToInt64(Scalar(connection, """
+            SELECT (SELECT COUNT(*) FROM tag_groups WHERE deleted_utc IS NULL AND is_system=1 AND
+                code IN ('author','organization','subject','topic','purpose','other')) <> 6
+            OR EXISTS(SELECT 1 FROM tag_groups WHERE deleted_utc IS NULL AND
+                (is_system<>1 OR code NOT IN ('author','organization','subject','topic','purpose','other')))
+            OR EXISTS(SELECT 1 FROM material_images WHERE deleted_utc IS NULL AND is_primary<>1)
+            OR EXISTS(SELECT 1 FROM material_images WHERE deleted_utc IS NULL GROUP BY material_id HAVING COUNT(*)>1)
+            OR EXISTS(SELECT 1 FROM tags t LEFT JOIN tag_groups g ON g.id=t.group_id
+                      WHERE t.deleted_utc IS NULL AND (g.id IS NULL OR g.deleted_utc IS NOT NULL));
+            """, transaction)) != 0)
+            throw new CatalogStorageException("Нарушена структура карточек или типов тегов каталога.");
         if (version >= 6 && Convert.ToInt64(Scalar(connection, """
             SELECT
               (SELECT COUNT(*) FROM training_prompts p JOIN materials m ON m.id=p.material_id

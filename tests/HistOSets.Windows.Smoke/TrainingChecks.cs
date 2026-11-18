@@ -11,7 +11,8 @@ internal static partial class Program
 {
     private static void CheckTrainingWorkflow(string temp, string output)
     {
-        var root = Path.Combine(temp, "training-native-catalog");
+        var root = Path.Combine(temp, "training-native-catalog.histosets");
+        CatalogStore.CreateCatalog(root, "Training fixture");
         Guid materialId;
         Guid tagId;
         Guid[] allIds;
@@ -111,13 +112,13 @@ internal static partial class Program
             Check(saved.TrainingPrompts.Count == 2 && saved.Elements[0].TrainingPrompts.Single().Texts["en"] == "Locate the rounded part deep within the field.",
                 "Reopening the catalog restores bilingual descriptions for both training scopes");
         }
-        var home = new HomeWindow(sourceDirectory: null, catalogDirectory: root, rememberLocation: false); home.Show();
+        var home = new HomeWindow(catalogPath: root, rememberLocation: false); home.Show();
         try
         {
             WaitHome(home);
             if (Equals(((Button)home.FindName("ViewButton")).Content, "View")) Click(home, "LanguageButton");
             Check(((Button)home.FindName("SelfTestButton")).IsEnabled, "The home screen enables training preparation for its selected catalog");
-            var before = ExchangeCatalogSnapshot(root);
+            var before = SessionCatalogBytes(root);
             InModal<TrainingSetupWindow>(home, "SelfTestButton", setup =>
             {
                 WaitTraining(setup);
@@ -168,8 +169,8 @@ internal static partial class Program
                 SaveScreenshot(setup, Path.Combine(output, "native-training-methods-ru.png"));
                 setupScroll.ScrollToTop(); Pump();
             });
-            Check(ExchangeCatalogSnapshot(root) == before,
-                "Native training selection, previews, language changes and plan building leave all catalog bytes and file paths unchanged");
+            Check(SessionCatalogBytes(root) == before,
+                "Native training selection, previews, language changes and plan building leave the single catalog file unchanged");
         }
         finally { home.Close(); }
     }

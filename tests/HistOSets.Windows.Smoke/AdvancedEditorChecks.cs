@@ -1,6 +1,8 @@
 using System.IO;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -14,14 +16,16 @@ internal static partial class Program
 {
     private static void CheckAdvancedEditorWorkflow(string temp, string output)
     {
+        CheckSurfaceInteractions();
         var imagePath = System.IO.Path.Combine(temp, "calibration-source.png");
         CreateUniformImage(imagePath, 1200, 900);
-        var catalogRoot = System.IO.Path.Combine(temp, "advanced-editor-catalog");
+        var catalogPath = System.IO.Path.Combine(temp, "advanced-editor-catalog.histosets");
+        CatalogStore.CreateCatalog(catalogPath, "Advanced editor verification");
         Guid materialId;
         Guid editedRegionId;
         Guid rectangleId;
         IReadOnlyDictionary<Guid, string> savedRegions;
-        using (var store = new CatalogStore(catalogRoot))
+        using (var store = new CatalogStore(catalogPath))
         {
             var editor = new EditorWindow(store);
             editor.Show();
@@ -40,6 +44,9 @@ internal static partial class Program
                 DrawBox(editor, surface, "RectangleTool", new(100, 100), new(400, 300));
                 var initialRectangle = surface.Regions.Single();
                 editedRegionId = initialRectangle.Id;
+                var pixelMeasurement = ((TextBlock)editor.FindName("MeasurementSummary")).Text;
+                Check(string.Concat(pixelMeasurement.Where(ch => !char.IsWhiteSpace(ch))).Replace(',', '.').Contains("60000.00px²", StringComparison.Ordinal),
+                    "Large pixel areas are displayed with two decimal places and without scientific notation");
 
                 var uncalibratedSummary = ((TextBlock)editor.FindName("CalibrationSummary")).Text;
                 CalibrationDialog(editor, dialog =>
@@ -70,7 +77,10 @@ internal static partial class Program
                 Check(((TextBlock)editor.FindName("CalibrationSummary")).Text == calibratedSummary,
                     "Redo restores the exact working-copy calibration");
 
-                ((TextBox)editor.FindName("BrushRadiusInput")).Text = "20";
+                var radiusInput = (TextBox)editor.FindName("BrushRadiusInput");
+                CheckRadiusButtons(surface, (RepeatButton)editor.FindName("BrushRadiusDecrease"),
+                    (RepeatButton)editor.FindName("BrushRadiusIncrease"), radiusInput);
+                radiusInput.Text = "20";
                 ((RadioButton)editor.FindName("BrushTool")).IsChecked = true;
                 Click(editor, "ZoomInButton");
                 Check(Near(surface.BrushRadius, 20), "Brush radius is entered in original image pixels");
@@ -170,11 +180,14 @@ internal static partial class Program
             }
             finally { if (editor.IsVisible) CloseEditorForCleanup(editor); }
 
+            File.Delete(imagePath);
             editor = new EditorWindow(store, materialId);
             editor.Show();
             Pump();
             try
             {
+                Check(((RegionEditorSurface)editor.FindName("Surface")).ImageSource is not null,
+                    "The editor reads the stored original from the catalog file after its source photo is removed");
                 CalibrationDialog(editor, dialog =>
                 {
                     SetCalibrationFields(dialog, "1.2", "0.9", "mm");
@@ -190,23 +203,87 @@ internal static partial class Program
             finally { if (editor.IsVisible) CloseEditorForCleanup(editor); }
         }
 
-        using (var reopened = new CatalogStore(catalogRoot))
+        var copy = System.IO.Path.Combine(temp, "advanced-editor-copy.histosets");
+        using (var reopened = new CatalogStore(catalogPath))
         {
             var saved = reopened.LoadMaterialDraft(materialId);
             CheckCalibration(saved.Images.Single().Calibration);
             Check(SameRegions(saved.Elements.Single().Regions.Select(r => new AtlasRegion(r.Id, r.Geometry)), savedRegions),
                 "Restart retains exact compound rings, holes, independent regions and unchanged v1 rectangle geometry");
             CheckAdvancedReadOnlyViewer(reopened, editedRegionId, output);
-            var backup = System.IO.Path.Combine(temp, "advanced-editor-backup.histosets");
-            reopened.CreateBackup(backup);
-            var restoredRoot = System.IO.Path.Combine(temp, "advanced-editor-restored");
-            CatalogStore.RestoreBackup(backup, restoredRoot);
-            using var restored = new CatalogStore(restoredRoot);
-            var restoredDraft = restored.LoadMaterialDraft(materialId);
-            CheckCalibration(restoredDraft.Images.Single().Calibration);
-            Check(SameRegions(restoredDraft.Elements.Single().Regions.Select(r => new AtlasRegion(r.Id, r.Geometry)), savedRegions),
-                "Backup and restore retain exact v1 and v2 geometry together with image calibration");
+            reopened.CreateBackup(copy);
         }
+        using var copied = new CatalogStore(copy);
+        var copiedDraft = copied.LoadMaterialDraft(materialId);
+        CheckCalibration(copiedDraft.Images.Single().Calibration);
+        Check(SameRegions(copiedDraft.Elements.Single().Regions.Select(r => new AtlasRegion(r.Id, r.Geometry)), savedRegions),
+            "The standalone copy opens directly and retains exact v1 and v2 geometry and calibration");
+        CheckImageReplacement(copied, materialId, savedRegions, temp);
+    }
+
+    private static void CheckImageReplacement(CatalogStore store, Guid materialId, IReadOnlyDictionary<Guid, string> regions, string temp)
+    {
+        var replacement = System.IO.Path.Combine(temp, "editor-replacement.png");
+        CreateUniformImage(replacement, 1024, 768);
+        var previousImage = store.LoadMaterialDraft(materialId).Images.Single().ImageId;
+        var other = store.LoadTaxonomy().Groups.Single(group => group.Code == "other").Id;
+        for (var i = 1; i <= 20; i++) store.SaveTag(null, other, $"Проверочный тег {i}", $"Test tag {i}");
+        var editor = new EditorWindow(store, materialId);
+        editor.Show();
+        Pump();
+        try
+        {
+            var tabs = (TabControl)editor.FindName("FormTabs");
+            tabs.SelectedItem = editor.FindName("MetadataTab");
+            editor.UpdateLayout();
+            var tags = (ScrollViewer)editor.FindName("TagValuesScroll");
+            Check(tags.ActualHeight is > 0 and <= 200 && tags.ScrollableHeight > 0,
+                "A long list of tag values scrolls inside a bounded editor container");
+            var surface = (RegionEditorSurface)editor.FindName("Surface");
+            RespondToImageReplacement(editor, replacement, "CancelImageChangeButton");
+            Check(surface.ImageWidth == 1200 && SameRegions(surface.Regions, regions),
+                "Declining image replacement preserves the original and all its contours");
+            RespondToImageReplacement(editor, replacement, "ConfirmImageChangeButton");
+            Check(surface.ImageWidth == 1024 && surface.Regions.Count == 0 && store.LoadMaterialDraft(materialId).Images.Single().ImageId == previousImage,
+                "Image replacement is staged with an empty region list; the catalog is untouched until saving");
+            Click(editor, "UndoButton");
+            Check(surface.ImageWidth == 1200 && SameRegions(surface.Regions, regions)
+                && KnownRectangleMeasurementsAfterSelection(surface, editor),
+                "Undo restores the original picture, contours and physical calibration together");
+            Click(editor, "RedoButton");
+            Click(editor, "SaveDraftButton");
+            var saved = store.LoadMaterialDraft(materialId);
+            var image = saved.Images.Single();
+            Check(editor.SavedMaterialId == materialId && image.ImageId != previousImage && image.Metadata?.Width == 1024
+                && image.Calibration is null && saved.Elements.Single().Regions.Count == 0,
+                "Saving a replacement keeps exactly one image and retires the old regions and calibration");
+            using var input = File.OpenRead(replacement);
+            using var stored = store.OpenImage(image.ImageId!.Value);
+            Check(SHA256.HashData(input).SequenceEqual(SHA256.HashData(stored)),
+                "The catalog stores the replacement photo byte for byte");
+        }
+        finally { if (editor.IsVisible) CloseEditorForCleanup(editor); }
+    }
+
+    private static bool KnownRectangleMeasurementsAfterSelection(RegionEditorSurface surface, EditorWindow editor)
+    {
+        surface.SelectRegion(surface.Regions.Single(r => r.Geometry.Kind == "rectangle").Id);
+        return KnownRectangleMeasurements(((TextBlock)editor.FindName("MeasurementSummary")).Text);
+    }
+
+    private static void RespondToImageReplacement(EditorWindow editor, string path, string button)
+    {
+        var handled = false;
+        editor.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            var dialog = Application.Current.Windows.Cast<Window>().SingleOrDefault(w => w.GetType().Name == "EditorImageChangePrompt");
+            if (dialog is null) return;
+            try { Click(dialog, button); handled = true; }
+            finally { if (dialog.IsVisible) dialog.Close(); }
+        }));
+        editor.AddImageFromPath(path);
+        Pump();
+        Check(handled, "Replacement uses the same confirmation for file picker and direct selection");
     }
 
     private static void CheckAdvancedReadOnlyViewer(CatalogStore store, Guid compoundId, string output)
