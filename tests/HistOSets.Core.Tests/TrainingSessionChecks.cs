@@ -13,6 +13,11 @@ internal static class TrainingSessionChecks
 
         static Guid Id(int value) => new(value, 0, 0, new byte[8]);
         static Dictionary<string, string> Names(string ru, string en) => new() { ["ru"] = ru, ["en"] = en };
+        check(new TrainingNameQuery("БАЗАЛЬНЫЕ   мембраны").Matches("Базальная мембрана"),
+            "Session: different word endings find a canonical name in the suggestions");
+        check(new TrainingNameQuery("epithilium").Matches("Simple columnar epithelium")
+            && !new TrainingNameQuery("myocyte").Matches("Simple columnar epithelium"),
+            "Session: a minor typo finds a term without accepting unrelated words as suggestions");
         static TrainingImage Image(int id) => new(Id(id), Id(id + 1000), "image-" + id, true, 0, 100, 100, true);
         static TrainingDescription Description(int id, string ru, string en) => new(Id(id), Names(ru, en), true, 0);
         var group = new TrainingAnalogGroup(Id(500), Names("Кожа", "Skin"));
@@ -162,11 +167,11 @@ internal static class TrainingSessionChecks
         var sourceDrawing = new List<RegionGeometry> { region.Geometry };
         var traced = traceOnly.SubmitTrace(sourceDrawing);
         sourceDrawing.Clear();
-        check(traced.Outcome == TrainingOutcome.Compared && traced.Trace is not null && traced.Trace.Regions.Count == 1
+        check(traced.Outcome == TrainingOutcome.Correct && traced.Trace is not null && traced.Trace.Regions.Count == 1
             && traced.Trace.Regions[0] == region.Geometry && traced.SelectedAnswer is null && traced.SelectedMaterialImageId is null
             && traced.Reason is null && traced.Trace.Comparison.Coverage == 1 && traced.Trace.Comparison.Precision == 1
             && traced.Trace.Comparison.ExcessFraction == 0 && traceOnly.CurrentResult == traced && !traceOnly.IsFinished,
-            "Session: a submitted drawing is frozen with numeric feedback and no invented correct/incorrect outcome");
+            "Session: a correct drawing is frozen with numeric feedback");
         Reject<NotSupportedException>(() => ((IList<RegionGeometry>)traced.Trace!.Regions).Clear(),
             "retained drawing cannot be changed through a collection cast");
         Reject<NotSupportedException>(() => ((IList<AtlasPoint>)traced.Trace!.Regions[0].Points).Add(new(0, 0)),
@@ -176,7 +181,8 @@ internal static class TrainingSessionChecks
         Reject<InvalidOperationException>(() => traceOnly.Skip(), "a compared drawing cannot become a skipped answer");
         Reject<InvalidOperationException>(() => traceOnly.MarkUnavailable("changed"), "later image changes cannot erase a submitted comparison");
         check(traceOnly.Summary.Answered == 1 && traceOnly.Summary.Compared == 1 && traceOnly.Summary.RecognitionAnswered == 0
-            && traceOnly.Summary.Correct == 0 && traceOnly.Summary.Incorrect == 0 && traceOnly.Summary.Accuracy is null,
+            && traceOnly.Summary.TraceCorrect == 1 && traceOnly.Summary.Correct == 1
+            && traceOnly.Summary.Incorrect == 0 && traceOnly.Summary.Accuracy is null,
             "Session: a tracing-only result counts as answered and has no recognition accuracy percentage");
         traceOnly.Advance();
         check(traceOnly.IsFinished && traceOnly.Results.Single() == traced && traceOnly.Summary.Pending == 0,
@@ -193,7 +199,7 @@ internal static class TrainingSessionChecks
         check(asyncTrace.Results.Count == 0 && asyncTrace.CurrentResult is null,
             "Session: cancellation and rejected asynchronous input preserve the pending question");
         var asyncResult = asyncTrace.SubmitTraceAsync([region.Geometry]).GetAwaiter().GetResult();
-        check(asyncResult.Outcome == TrainingOutcome.Compared && asyncResult.Trace!.Comparison.Coverage == 1
+        check(asyncResult.Outcome == TrainingOutcome.Correct && asyncResult.Trace!.Comparison.Coverage == 1
             && asyncTrace.CurrentResult == asyncResult && asyncTrace.Summary.Compared == 1,
             "Session: asynchronous drawing comparison records the same geometry feedback exactly once");
         Reject<InvalidOperationException>(() => asyncTrace.SubmitTraceAsync([region.Geometry]).GetAwaiter().GetResult(),
@@ -254,16 +260,26 @@ internal static class TrainingSessionChecks
 
         var partialTrace = new TrainingSession(Slice(traceQuestion));
         var partial = partialTrace.SubmitTrace([RegionGeometry.Rectangle(10, 10, 12.5, 40)]);
-        check(partial.Outcome == TrainingOutcome.Compared && partial.Trace!.Comparison.Coverage == .5
+        check(partial.Outcome == TrainingOutcome.Incorrect && partial.Trace!.Comparison.Coverage == .5
             && partial.Trace.Comparison.Precision == 1 && partial.Trace.Comparison.ExcessArea == 0
-            && partialTrace.Summary.Incorrect == 0,
-            "Session: partial coverage remains quantitative without an arbitrary failure threshold");
+            && partialTrace.Summary.TraceIncorrect == 1,
+            "Session: missing half the reference fails even with perfect precision");
+        var excessive = new TrainingSession(Slice(traceQuestion)).SubmitTrace([RegionGeometry.Rectangle(10, 10, 50, 40)]);
+        check(excessive.Outcome == TrainingOutcome.Incorrect && excessive.Trace!.Comparison.Coverage == 1
+            && excessive.Trace.Comparison.Precision == .5,
+            "Session: excessive area fails even with complete reference coverage");
+        var threshold = new TrainingSession(Slice(traceQuestion)).SubmitTrace([RegionGeometry.Rectangle(16.25, 10, 25, 40)]);
+        check(threshold.Outcome == TrainingOutcome.Correct && threshold.Trace!.Comparison.Coverage == .75
+            && threshold.Trace.Comparison.Precision == .75, "Session: exactly 75 percent on both measures passes");
+        var below = new TrainingSession(Slice(traceQuestion)).SubmitTrace([RegionGeometry.Rectangle(16.2501, 10, 25, 40)]);
+        check(below.Outcome == TrainingOutcome.Incorrect && below.Trace!.Comparison.Coverage < .75,
+            "Session: grade uses measured values before display rounding");
         var missedTrace = new TrainingSession(Slice(traceQuestion));
         var missed = missedTrace.SubmitTrace([RegionGeometry.Rectangle(60, 60, 10, 10)]);
-        check(missed.Outcome == TrainingOutcome.Compared && missed.Trace!.Comparison.Coverage == 0
+        check(missed.Outcome == TrainingOutcome.Incorrect && missed.Trace!.Comparison.Coverage == 0
             && missed.Trace.Comparison.Precision == 0 && missed.Trace.Comparison.ExcessFraction == 1
             && missedTrace.Summary.Answered == 1 && missedTrace.Summary.Accuracy is null,
-            "Session: a disjoint filled answer retains its zero intersection and remains a comparison");
+            "Session: a disjoint filled answer is incorrect and retains its zero intersection");
 
         var mixed = new TrainingSession(Slice(session.Questions[0], traceQuestion, elementQuestion));
         mixed.SubmitAnswer(mixed.CurrentQuestion!.Answer.Key);
@@ -273,7 +289,8 @@ internal static class TrainingSessionChecks
         mixed.SubmitAnswer(mixed.CurrentAnswers.First(a => a.Key != mixed.CurrentQuestion!.Answer.Key).Key);
         mixed.Advance();
         check(mixed.Summary.Total == 3 && mixed.Summary.Answered == 3 && mixed.Summary.Compared == 1
-            && mixed.Summary.RecognitionAnswered == 2 && mixed.Summary.Correct == 1 && mixed.Summary.Incorrect == 1
+            && mixed.Summary.RecognitionAnswered == 2 && mixed.Summary.RecognitionCorrect == 1 && mixed.Summary.RecognitionIncorrect == 1
+            && mixed.Summary.TraceCorrect == 1 && mixed.Summary.Correct == 2 && mixed.Summary.Incorrect == 1
             && mixed.Summary.Accuracy == .5,
             "Session: mixed-session accuracy divides correct recognition answers only by checked recognition answers");
         var traceEnded = new TrainingSession(Slice(traceQuestion, elementQuestion));
@@ -346,7 +363,8 @@ internal static class TrainingSessionChecks
                 && pair.First.SelectedMaterialImageId == pair.Second.SelectedMaterialImageId
                 && (pair.First.Trace is null ? pair.Second.Trace is null : pair.First.Trace.Regions.SequenceEqual(pair.Second.Trace!.Regions)
                     && pair.First.Trace.Comparison.IntersectionArea == pair.Second.Trace.Comparison.IntersectionArea))
-            && english.Summary.Correct == 5 && english.Summary.Compared == 1 && english.Summary.Accuracy == 1,
+            && english.Summary.Correct == 6 && english.Summary.RecognitionCorrect == 5 && english.Summary.TraceCorrect == 1
+            && english.Summary.Accuracy == 1,
             "Session: identical choices against the same frozen plan produce identical results");
         check(plan.QuestionCount == 6 && plan.SourceFingerprint == "original-source" && plan.CatalogRevision == 5
             && catalog.Materials[0].Elements[0].Regions[0].Geometry == region.Geometry,

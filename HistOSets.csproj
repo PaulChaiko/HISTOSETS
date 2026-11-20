@@ -8,29 +8,20 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>LOGO\Icon.ico</ApplicationIcon>
     <RootNamespace>HistOSets</RootNamespace>
-    <Version>0.7.3</Version>
-    <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**;Viewer/**;artifacts/**</DefaultItemExcludes>
+    <Version>0.8.0</Version>
+    <DefaultItemExcludes>$(DefaultItemExcludes);src/**;tests/**;tools/**;Viewer/**;artifacts/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="src\HistOSets.Core\HistOSets.Core.csproj" />
     <ProjectReference Include="src\HistOSets.Storage\HistOSets.Storage.csproj" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
     <Resource Include="LOGO\Icon.ico;LOGO\LOGO2.png;LOGO\GBL.png" />
     <Content Include="THIRD-PARTY-NOTICES.txt;licenses\*.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
-    <Content Include="ATLAS\ATLAS.xml;SPECIMENS\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-    <Content Include="Viewer\dist\**\*">
-      <Link>Viewer\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    <Content Include="Demo.histosets" Condition="Exists('Demo.histosets')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
-  <Target Name="EnsureViewerAssets" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true'">
-    <Error Condition="!Exists('Viewer/dist/index.html')" Text="Build viewer first: npm ci --prefix Viewer; npm run build --prefix Viewer" />
-  </Target>
 </Project>

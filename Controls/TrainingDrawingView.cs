@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using HistOSets.Core;
@@ -34,12 +35,14 @@ public sealed class TrainingDrawingView : UserControl
         Foreground = new SolidColorBrush(Color.FromRgb(135, 38, 44)), Visibility = Visibility.Collapsed
     };
     private readonly TextBox radiusBox = new() { Width = 64, Text = "16", Margin = new Thickness(5, 0, 4, 0), VerticalContentAlignment = VerticalAlignment.Center };
+    private readonly RepeatButton radiusDecrease = new() { Content = "−", MinWidth = 30, Margin = new Thickness(5, 0, 0, 3) };
+    private readonly RepeatButton radiusIncrease = new() { Content = "+", MinWidth = 30, Margin = new Thickness(0, 0, 4, 3) };
     private readonly Button undoButton = new(), redoButton = new(), deleteButton = new(), clearButton = new();
     private readonly Button finishButton = new(), cancelButton = new(), newBrushButton = new();
     private readonly Button zoomOut = new() { Content = "−" }, zoomIn = new() { Content = "+" }, fitButton = new();
     private readonly Button actualSizeButton = new() { Content = "1:1" };
-    private readonly CheckBox learnerOverlay = new() { IsChecked = true, Margin = new Thickness(0, 0, 16, 0) };
-    private readonly CheckBox referenceOverlay = new() { IsChecked = true };
+    private readonly TrainingOverlayControls learnerOverlay;
+    private readonly TrainingOverlayControls referenceOverlay;
     private bool hasImage, readOnly, comparison, changing, subscribed;
     private string? locale;
 
@@ -54,12 +57,16 @@ public sealed class TrainingDrawingView : UserControl
     {
         Focusable = false;
         NameScope.SetNameScope(this, new NameScope());
-        Surface.RegionFillBrush = Brush(Color.FromArgb(42, 0, 113, 188));
-        Surface.RegionStrokeBrush = Brush(Color.FromRgb(0, 113, 188));
-        Surface.SelectedFillBrush = Surface.RegionFillBrush;
-        Surface.SelectedStrokeBrush = Surface.RegionStrokeBrush;
-        Surface.ReferenceFillBrush = Brush(Color.FromArgb(35, 218, 112, 0));
-        Surface.ReferenceStrokeBrush = Brush(Color.FromRgb(218, 112, 0));
+        learnerOverlay = new(204, 188, 42, visible => Surface.ShowRegions = visible, (fill, stroke) =>
+        {
+            Surface.SelectedFillBrush = Surface.RegionFillBrush = fill;
+            Surface.SelectedStrokeBrush = Surface.RegionStrokeBrush = stroke;
+        });
+        referenceOverlay = new(31, 218, 35, visible => Surface.ShowReferenceRegions = visible, (fill, stroke) =>
+        {
+            Surface.ReferenceFillBrush = fill;
+            Surface.ReferenceStrokeBrush = stroke;
+        });
         var root = new DockPanel();
         var top = new StackPanel();
         DockPanel.SetDock(top, Dock.Top);
@@ -107,19 +114,23 @@ public sealed class TrainingDrawingView : UserControl
         AddButton(navigation, zoomIn, "DrawingZoomInButton", () => Surface.ZoomBy(1.25));
         AddButton(navigation, fitButton, "DrawingFitButton", () => Surface.FitToView());
         AddButton(navigation, actualSizeButton, "DrawingActualSizeButton", () => Surface.ActualSize());
-        radiusPanel.Children.Add(radiusLabel);
+        radiusLabel.Margin = new Thickness(0, 0, 3, 3);
+        navigation.Children.Add(radiusLabel);
+        Register(radiusDecrease, "DrawingDecreaseRadiusButton");
+        radiusPanel.Children.Add(radiusDecrease);
         Register(radiusBox, "DrawingBrushRadiusBox");
         radiusPanel.Children.Add(radiusBox);
+        Register(radiusIncrease, "DrawingIncreaseRadiusButton");
+        radiusPanel.Children.Add(radiusIncrease);
         radiusPanel.Children.Add(new TextBlock { Text = "px", VerticalAlignment = VerticalAlignment.Center });
         navigation.Children.Add(radiusPanel);
-        Register(learnerOverlay, "DrawingLearnerOverlayCheckBox");
-        Register(referenceOverlay, "DrawingReferenceOverlayCheckBox");
+        RadiusRepeatButtons.Configure(radiusDecrease, radiusIncrease, () => Surface.BrushRadius, SetRadius);
+        Register(learnerOverlay.Toggle, "DrawingLearnerOverlayCheckBox");
+        Register(referenceOverlay.Toggle, "DrawingReferenceOverlayCheckBox");
+        Register(learnerOverlay.Hue, "DrawingLearnerHueSlider");
+        Register(referenceOverlay.Hue, "DrawingReferenceHueSlider");
         legend.Children.Add(learnerOverlay);
         legend.Children.Add(referenceOverlay);
-        learnerOverlay.Checked += (_, _) => Surface.ShowRegions = true;
-        learnerOverlay.Unchecked += (_, _) => Surface.ShowRegions = false;
-        referenceOverlay.Checked += (_, _) => Surface.ShowReferenceRegions = true;
-        referenceOverlay.Unchecked += (_, _) => Surface.ShowReferenceRegions = false;
         radiusBox.LostKeyboardFocus += (_, _) => ApplyRadius();
         Surface.RegionsChanged += (_, args) =>
         {
@@ -288,7 +299,7 @@ public sealed class TrainingDrawingView : UserControl
             Surface.ReferenceRegions = [];
             Surface.SelectedRegionId = null;
             Surface.ShowRegions = Surface.ShowReferenceRegions = true;
-            learnerOverlay.IsChecked = referenceOverlay.IsChecked = true;
+            learnerOverlay.Toggle.IsChecked = referenceOverlay.Toggle.IsChecked = true;
             Surface.ImageWidth = image?.PixelWidth ?? 0;
             Surface.ImageHeight = image?.PixelHeight ?? 0;
             Surface.ImageSource = image?.Bitmap;
@@ -325,17 +336,23 @@ public sealed class TrainingDrawingView : UserControl
         NotifyChanged();
     }
 
+    private CultureInfo DisplayCulture => CultureInfo.GetCultureInfo((locale ?? UiLanguage.Locale) == "en" ? "en-US" : "ru-RU");
+
+    private void SetRadius(double value)
+    {
+        Surface.BrushRadius = value;
+        radiusBox.Text = value.ToString("G", DisplayCulture);
+        ClearStatus();
+    }
+
     private void ApplyRadius()
     {
         if (!hasImage || readOnly || HasPendingOperation) return;
-        var culture = CultureInfo.GetCultureInfo((locale ?? UiLanguage.Locale) == "en" ? "en-US" : "ru-RU");
+        var culture = DisplayCulture;
         var parsed = double.TryParse(radiusBox.Text, NumberStyles.Float, culture, out var value)
             || double.TryParse(radiusBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
-        if (parsed && double.IsFinite(value) && value >= 0.01 && value <= RegionGeometryOperations.MaxCoordinate)
-        {
-            Surface.BrushRadius = value;
-            ClearStatus();
-        }
+        if (parsed && double.IsFinite(value) && value >= RadiusRepeatButtons.Minimum && value <= RadiusRepeatButtons.Maximum)
+            SetRadius(value);
         else
             SetStatus("Радиус должен быть положительным числом от 0,01 до 1 000 000 000 пикселей исходного изображения.",
                 "The radius must be a positive number from 0.01 to 1,000,000,000 original image pixels.");
@@ -369,9 +386,11 @@ public sealed class TrainingDrawingView : UserControl
                 button.IsChecked = Surface.Tool == tool;
                 button.IsEnabled = editable && !HasPendingOperation;
             }
-            tools.Visibility = commands.Visibility = radiusPanel.Visibility = comparison ? Visibility.Collapsed : Visibility.Visible;
+            tools.Visibility = commands.Visibility = radiusLabel.Visibility = radiusPanel.Visibility = comparison ? Visibility.Collapsed : Visibility.Visible;
             help.Visibility = comparison ? Visibility.Collapsed : Visibility.Visible;
-            legend.Visibility = comparison ? Visibility.Visible : Visibility.Collapsed;
+            legend.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
+            learnerOverlay.Visibility = comparison && regions.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            referenceOverlay.Visibility = comparison ? Visibility.Visible : Visibility.Collapsed;
             undoButton.IsEnabled = editable && (undo.Count > 0 || HasPendingOperation);
             redoButton.IsEnabled = editable && !HasPendingOperation && redo.Count > 0;
             deleteButton.IsEnabled = editable && !HasPendingOperation && Surface.SelectedRegionId is not null;
@@ -379,7 +398,7 @@ public sealed class TrainingDrawingView : UserControl
             newBrushButton.IsEnabled = editable && !HasPendingOperation;
             finishButton.IsEnabled = editable && Surface.HasPendingPolygon;
             cancelButton.IsEnabled = editable && HasPendingOperation;
-            radiusBox.IsEnabled = editable && !HasPendingOperation;
+            radiusDecrease.IsEnabled = radiusIncrease.IsEnabled = radiusBox.IsEnabled = editable && !HasPendingOperation;
             zoomOut.IsEnabled = zoomIn.IsEnabled = fitButton.IsEnabled = actualSizeButton.IsEnabled = hasImage && !HasPendingOperation;
         }
         finally { changing = false; }
@@ -421,10 +440,12 @@ public sealed class TrainingDrawingView : UserControl
         AutomationProperties.SetName(actualSizeButton, T("Один пиксель изображения на единицу экрана", "One image pixel per screen unit"));
         radiusLabel.Text = T("Радиус кисти / ластика:", "Brush / eraser radius:");
         AutomationProperties.SetName(radiusBox, radiusLabel.Text);
-        help.Text = T("Нарисуйте все области указанного элемента. Полигон: точки щелчками, Enter — завершить; Esc — отменить. Кисть добавляет, ластик вычитает из выбранной области. Колесо — масштаб; «Панорама» — перемещение.",
-            "Draw all regions of the requested element. Polygon: click vertices, Enter to finish; Esc to cancel. Brush adds to the selected region; eraser subtracts from it. Wheel zooms; Pan moves the image.");
-        learnerOverlay.Content = T("Ответ — синяя сплошная линия", "Your drawing — solid blue");
-        referenceOverlay.Content = T("Эталон — оранжевый пунктир", "Reference — dashed orange");
+        RadiusRepeatButtons.Localize(radiusDecrease, radiusIncrease, T);
+        help.Text = T("Нарисуйте все области элемента. Полигон: щелчки, Enter — завершить; Esc — отменить. Колесо — масштаб; правая кнопка мыши — перемещение.",
+            "Draw all regions of the element. Polygon: click vertices; Enter to finish, Esc to cancel. Wheel: zoom; right drag: pan.");
+        var hue = T("Оттенок", "Hue");
+        learnerOverlay.SetLabels(T("Ответ (сплошная линия)", "Drawing (solid line)"), hue, T("Оттенок ответа", "Drawing hue"));
+        referenceOverlay.SetLabels(T("Эталон (пунктир)", "Reference (dashed line)"), hue, T("Оттенок эталона", "Reference hue"));
         AutomationProperties.SetName(Surface, T("Области ответа", "Answer regions"));
     }
 

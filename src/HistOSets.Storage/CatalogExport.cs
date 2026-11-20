@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.IO.Compression;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using static HistOSets.Storage.CatalogDatabase;
@@ -23,7 +22,7 @@ public sealed partial class CatalogStore
         }
     }
 
-    /// <summary>Export only selected roots and their dependencies. Existing destinations are never overwritten.</summary>
+    /// <summary>Export a standalone catalog containing only the selected roots and their dependencies.</summary>
     public void ExportMaterials(string destination, IReadOnlyCollection<Guid> materialIds)
     {
         ArgumentNullException.ThrowIfNull(materialIds);
@@ -34,73 +33,77 @@ public sealed partial class CatalogStore
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             destination = Path.GetFullPath(destination);
-            if (File.Exists(destination)) throw new CatalogStorageException("Файл уже существует. Выберите новое имя пакета обмена.");
-            var partial = destination + ".partial-" + Guid.NewGuid().ToString("N");
-            var stage = Path.Combine(Path.GetTempPath(), "histosets-export-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(stage);
-            try
+            if (!Path.GetExtension(destination).Equals(".histosets", StringComparison.OrdinalIgnoreCase))
+                throw new CatalogStorageException("Выберите расширение .histosets для каталога.");
+            if (File.Exists(destination)) throw new CatalogStorageException("Файл уже существует. Выберите новое имя каталога.");
+            PublishFile(destination, partial =>
             {
-                IReadOnlyDictionary<string, IReadOnlyList<ExchangeRow>> tables;
-                CatalogMetadata metadata;
-                using (var connection = Open(DatabasePath))
-                using (var transaction = connection.BeginTransaction(deferred: true))
-                {
-                    Validate(connection, transaction: transaction);
-                    tables = ReadExchangeSelection(connection, selected, transaction);
-                    using var command = Command(connection, "SELECT catalog_id,name,format_version,content_revision,created_utc,modified_utc FROM catalog_metadata;", transaction);
-                    using var reader = command.ExecuteReader();
-                    if (!reader.Read()) throw new CatalogStorageException("Отсутствуют сведения о каталоге.");
-                    metadata = new(Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.GetInt32(2), reader.GetInt64(3),
-                        DateTimeOffset.Parse(reader.GetString(4), System.Globalization.CultureInfo.InvariantCulture),
-                        DateTimeOffset.Parse(reader.GetString(5), System.Globalization.CultureInfo.InvariantCulture));
-                }
+                using var source = Open(DatabasePath);
+                using var snapshot = source.BeginTransaction(deferred: true);
+                Validate(source, transaction: snapshot);
+                var tables = ReadExchangeSelection(source, selected, snapshot);
                 if (tables["materials"].Count != selected.Length)
                     throw new CatalogStorageException("Выбранный объект больше не существует. Обновите список экспорта.");
-                if (tables.Sum(t => t.Value.Count) > ExchangePackage.MaxRows) throw new CatalogStorageException("В выбранных объектах слишком много записей для одного пакета.");
-                var graphPath = Path.Combine(stage, "graph.json");
-                using (var stream = new FileStream(graphPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                using (var writer = new Utf8JsonWriter(stream))
+                var (_, sourceId, sourceName, revision, _) = ReadExchangeOrigin(source, snapshot);
+                Create(partial, sourceName);
+                using (var target = Open(partial, SqliteOpenMode.ReadWrite))
+                using (var transfer = target.BeginTransaction())
                 {
-                    writer.WriteStartObject();
-                    foreach (var table in ExchangeSchema.TableNames)
+                    ExchangePackage.InsertGraph(target, transfer, tables);
+                    foreach (var row in tables["images"])
                     {
-                        writer.WritePropertyName(table); writer.WriteStartArray();
-                        foreach (var row in tables[table]) JsonSerializer.Serialize(writer, row.Values);
-                        writer.WriteEndArray();
+                        using var original = ReadImageContent(source, snapshot, row.Id);
+                        WriteImageContent(target, transfer, row.Id, original, row.Integer("byte_size"), row.String("sha256")!);
                     }
-                    writer.WriteEndObject();
+                    Execute(target, """
+                        INSERT INTO exchange_origin(singleton,source_catalog_id,source_catalog_name,source_content_revision,exported_utc)
+                        VALUES(1,$id,$name,$revision,$now);
+                        """, transfer, ("$id", sourceId.ToString()), ("$name", sourceName), ("$revision", revision), ("$now", StorageFiles.UtcNow()));
+                    Validate(target, transaction: transfer, deep: true);
+                    VerifyImageContents(target, transfer);
+                    transfer.Commit();
                 }
-                var graphSize = new FileInfo(graphPath).Length;
-                if (graphSize > ExchangePackage.MaxGraphBytes) throw new CatalogStorageException("Описания выбранных объектов превышают предел пакета 128 МиБ.");
-                var files = new List<ExchangePackage.ExchangeFile> { new("graph.json", StorageFiles.Hash(graphPath), graphSize) };
-                files.AddRange(tables["images"].Select(r => new ExchangePackage.ExchangeFile(r.String("storage_key")!, r.String("sha256")!, r.Integer("byte_size"))));
-                if (files.Count > ExchangePackage.MaxFiles + 1 || files.Any(f => f.Size <= 0 || f.Size > ExchangePackage.MaxBytes) ||
-                    files.Aggregate(0L, (sum, f) => checked(sum + f.Size)) > ExchangePackage.MaxBytes)
-                    throw new CatalogStorageException("Выбранные изображения превышают предел пакета 64 ГиБ.");
-                var manifest = new ExchangePackage.ExchangeManifest(2, Guid.NewGuid().ToString(), metadata.Id.ToString(), metadata.Name,
-                    metadata.ContentRevision, StorageFiles.UtcNow(), files);
-                using (var archive = ZipFile.Open(partial, ZipArchiveMode.Create))
-                {
-                    foreach (var file in files)
-                    {
-                        var path = file.Path == "graph.json" ? graphPath : StorageFiles.Resolve(RootDirectory, file.Path);
-                        using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                        using var output = archive.CreateEntry(file.Path, CompressionLevel.Fastest).Open();
-                        ExchangePackage.CopyVerified(input, output, file);
-                    }
-                    using var outputManifest = archive.CreateEntry("manifest.json").Open();
-                    JsonSerializer.Serialize(outputManifest, manifest);
-                }
-                File.Move(partial, destination);
-            }
-            finally
+            });
+        }
+    }
+
+    internal static (Guid CatalogId, Guid SourceId, string Name, long Revision, string Time) ReadExchangeOrigin(
+        SqliteConnection connection, SqliteTransaction transaction)
+    {
+        Guid catalogId;
+        string name, time;
+        long revision;
+        using (var command = Command(connection, "SELECT catalog_id,name,content_revision,created_utc FROM catalog_metadata WHERE singleton=1;", transaction))
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read() || !ExchangePackage.IsUuid(reader.GetString(0)))
+                throw new CatalogStorageException("Не удалось определить источник каталога.");
+            catalogId = Guid.Parse(reader.GetString(0));
+            name = reader.GetString(1);
+            revision = reader.GetInt64(2);
+            time = reader.GetString(3);
+        }
+        var sourceId = catalogId;
+        // An unedited export belongs to the sender lineage. After a local edit this
+        // standalone catalog has its own lineage and cannot silently replace the sender's revisions.
+        if (revision == 0)
+        {
+            using var command = Command(connection, """
+                SELECT source_catalog_id,source_catalog_name,source_content_revision,exported_utc FROM exchange_origin WHERE singleton=1;
+                """, transaction);
+            using var reader = command.ExecuteReader();
+            if (reader.Read())
             {
-                try { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-                try { if (File.Exists(partial)) File.Delete(partial); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                if (!ExchangePackage.IsUuid(reader.GetString(0))) throw new CatalogStorageException("Неверный идентификатор источника обмена.");
+                sourceId = Guid.Parse(reader.GetString(0));
+                name = reader.GetString(1);
+                revision = reader.GetInt64(2);
+                time = reader.GetString(3);
             }
         }
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 200 || revision < 0 || !ExchangePackage.IsTime(time))
+            throw new CatalogStorageException("Повреждены сведения об источнике каталога.");
+        return (catalogId, sourceId, name, revision, time);
     }
 
     internal static List<string> ExchangeReadinessIssues(SqliteConnection connection, string material, SqliteTransaction transaction) =>
@@ -126,7 +129,7 @@ public sealed partial class CatalogStore
         return result.AsReadOnly();
     }
 
-    private static IReadOnlyDictionary<string, IReadOnlyList<ExchangeRow>> ReadExchangeSelection(SqliteConnection connection, IReadOnlyList<Guid> ids, SqliteTransaction transaction)
+    internal static IReadOnlyDictionary<string, IReadOnlyList<ExchangeRow>> ReadExchangeSelection(SqliteConnection connection, IReadOnlyList<Guid> ids, SqliteTransaction transaction)
     {
         const string selected = "(SELECT value FROM json_each($ids))";
         const string tags = "(SELECT tag_id FROM material_tags WHERE material_id IN " + selected + ")";

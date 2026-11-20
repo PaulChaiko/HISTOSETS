@@ -1,4 +1,3 @@
-using HistOSets.Core;
 using Microsoft.Data.Sqlite;
 using static HistOSets.Storage.CatalogDatabase;
 
@@ -8,7 +7,7 @@ public sealed partial class CatalogStore
 {
     /// <summary>Applies explicitly resolved whole graphs atomically after a complete recovery snapshot.</summary>
     public ExchangeImportResult ApplyExchange(ExchangePreview preview,IReadOnlyDictionary<string,ExchangeResolution> choices,
-        Func<string,ImageMetadata>? readMetadata=null)
+        Func<Stream,ImageMetadata>? readMetadata=null)
     {
         ArgumentNullException.ThrowIfNull(preview);
         ArgumentNullException.ThrowIfNull(choices);
@@ -17,17 +16,15 @@ public sealed partial class CatalogStore
             ObjectDisposedException.ThrowIf(disposed,this);
             if(preview.TargetPath!=DatabasePath) throw new CatalogStorageException("План обмена относится к другому каталогу.");
             var package=preview.Package;
-            package.VerifyFiles();
-            if(readMetadata is not null) ValidateDecodedExchangeImages(package,readMetadata);
+            package.ThrowIfDisposed();
+            if(readMetadata is not null) package.ValidateImages(readMetadata);
             var resolutions=ExchangeResolutions(preview,choices);
             var incoming=ExchangeEntities(package.Tables).ToDictionary(e=>e.Key,StringComparer.Ordinal);
-            var installed=new List<string>();
-            var committed=false;
             try
             {
                 using var connection=Open(DatabasePath,SqliteOpenMode.ReadWrite);
                 Validate(connection);
-                _=ReferencedFiles(connection,RootDirectory);
+                VerifyImageContents(connection);
                 CheckExchangePreview(connection,null,preview);
                 var local=ReadExchangeTables(connection,null);
                 var locals=ExchangeEntities(local).ToDictionary(e=>e.Key,StringComparer.Ordinal);
@@ -54,17 +51,16 @@ public sealed partial class CatalogStore
                 CreateBackup(backup);
                 using var transaction=connection.BeginTransaction();
                 CheckExchangePreview(connection,transaction,preview);
-                package.VerifyFiles();
                 var now=StorageFiles.UtcNow();
                 var mappings=new Dictionary<(string Table,string Id),string>();
                 var selected=ExchangeEntities(package.Tables).Where(e=>changed.Contains(e.Key)).ToArray();
                 var imageIds=selected.Where(e=>e.Kind==ExchangeEntityKind.Material).SelectMany(e=>e.Rows["material_images"])
                     .Select(r=>r.String("image_id")!).ToHashSet(StringComparer.Ordinal);
                 foreach(var image in package.Tables["images"].Where(r=>imageIds.Contains(r.Id)))
-                    PrepareExchangeImage(connection,transaction,package,image,mappings,installed,now);
+                    PrepareExchangeImage(connection,transaction,package,image,mappings,now);
 
                 foreach(var entity in selected)
-                    ApplyExchangeEntity(connection,transaction,entity,mappings,now,package.FormatVersion==1);
+                    ApplyExchangeEntity(connection,transaction,entity,mappings,now);
                 RequireExchangeActiveReferences(connection,transaction);
                 var readyBefore=Convert.ToInt32(Scalar(connection,"SELECT COUNT(*) FROM materials WHERE status='ready' AND deleted_utc IS NULL;",transaction));
                 DemoteIncompleteMaterials(connection,transaction,now);
@@ -86,21 +82,13 @@ public sealed partial class CatalogStore
                         ("$sourceHash",sourceHash),("$localHash",localHash),("$revision",incoming[item.Key].Root.Integer("revision")),("$now",now));
                 }
                 TouchCatalog(connection,transaction,now);
-                Validate(connection,transaction:transaction);
-                // Every referenced original is verified before commit, including assets shared with unchanged objects.
-                VerifyExchangeManagedImages(connection,transaction);
+                Validate(connection,transaction:transaction,deep:true);
+                VerifyImageContents(connection,transaction);
                 transaction.Commit();
-                committed=true;
                 return new(added,updated,deleted,kept,skipped,demoted,backup,true);
             }
-            catch(Exception ex) when(!committed && ex is SqliteException or IOException or UnauthorizedAccessException or FormatException or ArgumentException or NotSupportedException)
+            catch(Exception ex) when(ex is SqliteException or IOException or UnauthorizedAccessException or FormatException or ArgumentException or NotSupportedException)
             { throw new CatalogStorageException("Не удалось применить обмен. Изменения базы отменены.\n"+ex.Message,ex); }
-            finally
-            {
-                if(!committed) foreach(var path in installed)
-                    try { if(File.Exists(path)) File.Delete(path); }
-                    catch(Exception ex) when(ex is IOException or UnauthorizedAccessException) { }
-            }
         }
     }
 
@@ -125,20 +113,8 @@ public sealed partial class CatalogStore
             throw new CatalogStorageException("Каталог изменился после предварительного просмотра. Обновите план обмена и повторно проверьте решения.");
     }
 
-    private static void ValidateDecodedExchangeImages(ExchangePackage package,Func<string,ImageMetadata> readMetadata)
-    {
-        foreach(var row in package.Tables["images"])
-        {
-            var actual=readMetadata(package.ImagePaths[row.String("storage_key")!]);
-            static bool Near(double left,double right)=>Math.Abs(left-right)<=Math.Max(Math.Abs(left),Math.Abs(right))*1e-9;
-            if(actual.Width!=row.Integer("pixel_width") || actual.Height!=row.Integer("pixel_height") || actual.Orientation!=row.Integer("orientation") || actual.MimeType!=row.String("mime_type")
-                || !Near(ImageCoordinates.EffectiveDpi(actual.DpiX),Convert.ToDouble(row.Values["dpi_x"])) || !Near(ImageCoordinates.EffectiveDpi(actual.DpiY),Convert.ToDouble(row.Values["dpi_y"])))
-                throw new CatalogStorageException("Параметры оригинала не соответствуют пакету. Обмен остановлен: "+row.Id);
-        }
-    }
-
-    private void PrepareExchangeImage(SqliteConnection connection,SqliteTransaction transaction,ExchangePackage package,ExchangeRow incoming,
-        Dictionary<(string Table,string Id),string> mappings,List<string> installed,string now)
+    private static void PrepareExchangeImage(SqliteConnection connection,SqliteTransaction transaction,ExchangePackage package,ExchangeRow incoming,
+        Dictionary<(string Table,string Id),string> mappings,string now)
     {
         var hash=incoming.String("sha256")!;
         var existing=Scalar(connection,"SELECT id FROM images WHERE sha256=$hash;",transaction,("$hash",hash)) as string;
@@ -150,40 +126,26 @@ public sealed partial class CatalogStore
                 Execute(connection,"UPDATE images SET deleted_utc=NULL,modified_utc=$now,revision=revision+1 WHERE id=$id AND deleted_utc IS NOT NULL;",transaction,("$now",now),("$id",existing));
             return;
         }
-        var extension=incoming.String("mime_type") switch
-        {
-            "image/jpeg"=>".jpg","image/png"=>".png","image/tiff"=>".tif","image/bmp"=>".bmp","image/gif"=>".gif",
-            _=>throw new CatalogStorageException("Формат изображения пока не поддерживается: "+incoming.String("mime_type"))
-        };
-        var key="SPECIMENS/"+hash+extension;
-        var path=StorageFiles.Resolve(RootDirectory,key);
-        if(File.Exists(path))
-        {
-            if(new FileInfo(path).Length!=incoming.Integer("byte_size") || StorageFiles.Hash(path)!=hash)
-                throw new CatalogStorageException("Повреждён файл существующего каталога: "+key);
-        }
-        else
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            using var input=new FileStream(package.ImagePaths[incoming.String("storage_key")!],FileMode.Open,FileAccess.Read,FileShare.Read);
-            using var output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None);
-            installed.Add(path);
-            CopyVerified(input,output,new(key,hash,incoming.Integer("byte_size")));
-        }
-        var values=incoming.Values.ToDictionary(p=>p.Key,p=>p.Value,StringComparer.Ordinal);
-        values["storage_key"]=key;
-        WriteExchangeRow(connection,transaction,"images",new(values),mappings,now);
+        WriteExchangeRow(connection,transaction,"images",incoming,mappings,now);
+        using var original=package.OpenImage(incoming.Id);
+        WriteImageContent(connection,transaction,incoming.Id,original,incoming.Integer("byte_size"),hash);
     }
 
     private static void ApplyExchangeEntity(SqliteConnection connection,SqliteTransaction transaction,ExchangeEntity entity,
-        Dictionary<(string Table,string Id),string> mappings,string now,bool preserveTraining)
+        Dictionary<(string Table,string Id),string> mappings,string now)
     {
         var table=ExchangeRootTable(entity.Kind);
         var oldRevision=Scalar(connection,$"SELECT revision FROM {table} WHERE id=$id;",transaction,("$id",entity.Root.Id));
-        // Free partial unique slots (primary/calibration) before applying the incoming choice.
+        // Free the active image and calibration slots before writing a replacement.
         if(entity.Kind==ExchangeEntityKind.Material)
         {
-            Execute(connection,"UPDATE material_images SET is_primary=0,revision=revision+1,modified_utc=$now WHERE material_id=$id AND is_primary=1;",transaction,("$id",entity.Root.Id),("$now",now));
+            var active=entity.Rows["material_images"].SingleOrDefault(row=>row.String("deleted_utc") is null);
+            var incomingId=active?.String("image_id");
+            var asset=incomingId is null ? null : mappings.GetValueOrDefault(("images",incomingId),incomingId);
+            Execute(connection,"""
+                UPDATE material_images SET is_primary=0,deleted_utc=$now,modified_utc=$now,revision=revision+1
+                WHERE material_id=$id AND deleted_utc IS NULL AND ($asset IS NULL OR image_id<>$asset);
+                """,transaction,("$id",entity.Root.Id),("$asset",asset),("$now",now));
             Execute(connection,"""
                 UPDATE image_calibrations SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE deleted_utc IS NULL AND material_image_id IN
                 (SELECT id FROM material_images WHERE material_id=$id);
@@ -197,25 +159,10 @@ public sealed partial class CatalogStore
         var current=ExchangeEntities(after).Single(e=>e.Key==entity.Key);
         foreach(var (rowTable,rows) in current.Rows.Where(p=>p.Key!=table))
         {
-            // An update6 package cannot express an intentional removal of training descriptions.
-            // Keep those rows byte-for-byte unless their material/element owner is being deleted.
-            if (preserveTraining && ExchangeSchema.IsTrainingTable(rowTable) && entity.Root.String("deleted_utc") is null) continue;
             var retained=entity.Rows[rowTable].Select(r=>mappings.GetValueOrDefault((rowTable,r.Id),r.Id)).ToHashSet(StringComparer.Ordinal);
             foreach(var row in rows)
                 if(row.String("deleted_utc") is null && (entity.Root.String("deleted_utc") is not null || !retained.Contains(row.Id)))
                     Execute(connection,$"UPDATE {rowTable} SET deleted_utc=$now,modified_utc=$now,revision=revision+1 WHERE id=$id;",transaction,("$now",now),("$id",row.Id));
-        }
-        if (entity.Kind == ExchangeEntityKind.Material && preserveTraining)
-        {
-            Execute(connection,"""
-                UPDATE training_prompts SET deleted_utc=$now,modified_utc=$now,revision=revision+1
-                WHERE material_id=$id AND deleted_utc IS NULL AND
-                  (EXISTS(SELECT 1 FROM materials m WHERE m.id=training_prompts.material_id AND m.deleted_utc IS NOT NULL) OR
-                   EXISTS(SELECT 1 FROM elements e WHERE e.id=training_prompts.element_id AND e.deleted_utc IS NOT NULL));
-                UPDATE training_prompt_translations SET deleted_utc=$now,modified_utc=$now,revision=revision+1
-                WHERE deleted_utc IS NULL AND prompt_id IN
-                  (SELECT id FROM training_prompts WHERE material_id=$id AND deleted_utc IS NOT NULL);
-                """,transaction,("$now",now),("$id",entity.Root.Id));
         }
         if(oldRevision is not null)
             Execute(connection,$"UPDATE {table} SET revision=$revision,modified_utc=$now WHERE id=$id;",transaction,
@@ -307,17 +254,5 @@ public sealed partial class CatalogStore
                WHERE t.deleted_utc IS NULL AND p.deleted_utc IS NOT NULL);
             """,transaction));
         if(invalid!=0) throw new CatalogStorageException("Решения оставляют ссылки на удалённые записи. Сохраните используемые справочники или измените решения по связанным объектам.");
-    }
-
-    private void VerifyExchangeManagedImages(SqliteConnection connection,SqliteTransaction transaction)
-    {
-        using var command=Command(connection,"SELECT storage_key,sha256,byte_size FROM images UNION ALL SELECT source_key,xml_sha256,NULL FROM import_batches;",transaction);
-        using var reader=command.ExecuteReader();
-        while(reader.Read())
-        {
-            var path=StorageFiles.Resolve(RootDirectory,reader.GetString(0));
-            if(!File.Exists(path) || !reader.IsDBNull(2) && new FileInfo(path).Length!=reader.GetInt64(2) || StorageFiles.Hash(path)!=reader.GetString(1))
-                throw new CatalogStorageException("Отсутствует или повреждён файл: "+reader.GetString(0));
-        }
     }
 }

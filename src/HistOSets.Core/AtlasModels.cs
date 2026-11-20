@@ -35,9 +35,6 @@ public sealed record AtlasSpecimen(string Name, string ImagePath, string Summary
 public sealed record AtlasCatalog(IReadOnlyList<AtlasSpecimen> Specimens,
     IReadOnlyList<string> Warnings);
 
-public sealed class AtlasLoadException(string message, Exception? inner = null)
-    : Exception(message, inner);
-
 public static class ImageCoordinates
 {
     // The legacy editor recorded WPF DIPs, not necessarily source pixels.

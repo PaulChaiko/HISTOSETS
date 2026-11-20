@@ -14,6 +14,7 @@ public sealed class TrainingImageView : UserControl
     private readonly Button zoomIn = new() { Content = "+" };
     private readonly Button fit = new();
     private readonly Button actualSize = new() { Content = "1:1" };
+    private readonly TrainingOverlayControls overlay;
     private bool subscribed;
     private string? locale;
 
@@ -28,6 +29,7 @@ public sealed class TrainingImageView : UserControl
     public TrainingImageView()
     {
         Focusable = false;
+        NameScope.SetNameScope(this, new NameScope());
         var root = new DockPanel();
         var toolbar = new WrapPanel { Margin = new Thickness(0, 0, 0, 5) };
         foreach (var button in new[] { zoomOut, zoomIn, fit, actualSize })
@@ -37,6 +39,14 @@ public sealed class TrainingImageView : UserControl
             button.MinWidth = 32;
             toolbar.Children.Add(button);
         }
+        overlay = new(274, 246, 48, visible => Surface.ShowRegions = visible, (fill, stroke) =>
+        {
+            Surface.RegionFillBrush = fill;
+            Surface.RegionStrokeBrush = stroke;
+        }) { Visibility = Visibility.Collapsed };
+        RegisterName("TrainingRegionOverlayCheckBox", overlay.Toggle);
+        RegisterName("TrainingRegionHueSlider", overlay.Hue);
+        toolbar.Children.Add(overlay);
         DockPanel.SetDock(toolbar, Dock.Top);
         root.Children.Add(toolbar);
         root.Children.Add(new Border
@@ -70,6 +80,7 @@ public sealed class TrainingImageView : UserControl
         Surface.Tool = RegionEditorTool.Pan;
         Surface.SelectedRegionId = null;
         Surface.Regions = (regions ?? []).Select(region => new AtlasRegion(region.Id, region.Geometry)).ToArray();
+        overlay.Visibility = Surface.Regions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         Surface.ImageWidth = image.PixelWidth;
         Surface.ImageHeight = image.PixelHeight;
         Surface.ImageSource = image.Bitmap;
@@ -81,6 +92,7 @@ public sealed class TrainingImageView : UserControl
         Surface.CanEdit = false;
         Surface.Tool = RegionEditorTool.Pan;
         Surface.Regions = [];
+        overlay.Visibility = Visibility.Collapsed;
         Surface.SelectedRegionId = null;
         Surface.ImageSource = null;
         Surface.ImageWidth = 0;
@@ -105,6 +117,7 @@ public sealed class TrainingImageView : UserControl
         SetLabel(zoomIn, T("Увеличить", "Zoom in"));
         SetLabel(fit, T("Вписать изображение в окно", "Fit image to view"));
         SetLabel(actualSize, T("Один пиксель изображения на единицу экрана", "One image pixel per screen unit"));
+        overlay.SetLabels(T("Контур", "Outline"), T("Оттенок", "Hue"), T("Оттенок контура", "Outline hue"));
         AutomationProperties.SetName(Surface, T("Изображение задания", "Question image"));
     }
 

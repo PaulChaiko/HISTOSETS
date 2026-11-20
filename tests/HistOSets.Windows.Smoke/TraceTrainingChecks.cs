@@ -11,7 +11,8 @@ internal static partial class Program
 {
     private static void CheckTraceTrainingSessions(string temp, string output)
     {
-        var root = Path.Combine(temp, "trace-training-catalog");
+        var root = Path.Combine(temp, "trace-training-catalog.histosets");
+        CatalogStore.CreateCatalog(root, "Tracing fixture");
         using var store = new CatalogStore(root);
         var ids = CreateTraceCatalog(store, temp);
         var unchanged = SessionCatalogBytes(root);
@@ -56,16 +57,18 @@ internal static partial class Program
             Check(mixedPlan.QuestionCount == 3, "A mixed plan includes recognition, tracing and a dedicated object description"
                 + (mixedPlan.QuestionCount == 3 ? "" : $"; actual count {mixedPlan.QuestionCount}; {eligibilityDetails}"));
             RunSessionFromSetup(setup, session => CheckEnglishTraceSession(session, output));
+            Check(SessionCatalogBytes(root) == unchanged,
+                "Mixed sessions, repeat attempts and early completion persist no drawings or catalog edits");
 
             var catalog = store.CaptureTrainingCatalog(ImageLoader.ReadMetadata);
             var plan = TrainingPlanner.Build(catalog, new([ids[0]], [TrainingMethod.TraceElement], "en"));
-            var path = catalog.Materials.Single(m => m.Id == ids[0]).Images.Single().ImagePath
-                ?? throw new Exception("Tracing fixture image path is missing");
-            var original = File.ReadAllBytes(path);
+            var picture = catalog.Materials.Single(m => m.Id == ids[0]).Images.Single();
+            var original = ReadTrainingImage(store, picture.ImageId);
             try
             {
-                File.Delete(path);
-                WithSession(catalog, plan, session =>
+                WriteTrainingImage(root, picture.ImageId, null);
+                var broken = SessionCatalogBytes(root);
+                WithSession(store, catalog, plan, session =>
                 {
                     Check(session.Session.CurrentResult?.Outcome == TrainingOutcome.Unavailable
                         && !((Button)session.FindName("CheckAnswerButton")).IsEnabled
@@ -76,10 +79,10 @@ internal static partial class Program
                     Check(session.Session.Summary.Unavailable == 1 && session.Session.Summary.Accuracy is null,
                         "Missing tracing media remain outside the recognition accuracy denominator");
                 });
+                Check(SessionCatalogBytes(root) == broken,
+                    "Missing-image handling writes no attempt or repairs to the single catalog file");
             }
-            finally { File.WriteAllBytes(path, original); }
-            Check(SessionCatalogBytes(root) == unchanged,
-                "Mixed sessions, repeat attempts, early completion and missing-image handling persist no drawings or catalog edits");
+            finally { WriteTrainingImage(root, picture.ImageId, original); }
         }
         catch { if (setup.IsVisible) SaveScreenshot(setup, Path.Combine(output, "native-trace-setup-failure.png")); throw; }
         finally
@@ -137,7 +140,8 @@ internal static partial class Program
         var drawing = TraceView(session);
         var surface = drawing.Surface;
         Check(state.Questions.Count == 4 && state.DeferredQuestionCount == 0 && state.CurrentQuestion?.Method == TrainingMethod.TraceElement
-            && drawing.IsVisible && surface.ImageSource is not null && surface.Regions.Count == 0 && surface.ReferenceRegions.Count == 0,
+            && drawing.IsVisible && surface.ImageSource is not null && surface.Regions.Count == 0 && surface.ReferenceRegions.Count == 0
+            && !((Slider)drawing.FindName("DrawingReferenceHueSlider")).IsVisible,
             "A tracing question opens a clean editable image and does not supply its hidden reference to the drawing surface");
         Check(VisibleSessionText(session).Contains(state.CurrentQuestion!.Answer.Name, StringComparison.Ordinal)
             && !((ComboBox)session.FindName("AnswerSelector")).IsVisible
@@ -154,11 +158,11 @@ internal static partial class Program
         SaveScreenshot(session, Path.Combine(output, "native-trace-drawing-ru.png"));
         CompleteSessionTask(session, session.CheckAnswerAsync());
         var first = state.CurrentResult ?? throw new Exception("Trace check produced no result");
-        Check(first.Outcome == TrainingOutcome.Compared && first.Trace is not null
+        Check(first.Outcome == TrainingOutcome.Incorrect && first.Trace is not null
             && Near(first.Trace.Comparison.Coverage, .5) && Near(first.Trace.Comparison.Precision ?? -1, 1)
             && Near(first.Trace.Comparison.ExcessFraction ?? -1, 0)
-            && state.Summary.Compared == 1 && state.Summary.Correct == 0 && state.Summary.Incorrect == 0 && state.Summary.Accuracy is null,
-            "A native half-reference drawing reports 50% coverage, 100% precision and no excess without assigning a pass/fail grade");
+            && state.Summary.Compared == 1 && state.Summary.TraceCorrect == 0 && state.Summary.TraceIncorrect == 1 && state.Summary.Accuracy is null,
+            "A native half-reference drawing is incorrect at 50% coverage despite 100% precision and no excess");
         Check(surface.ReferenceRegions.Count == 1 && !surface.CanEdit
             && first.Trace!.Regions.Select(RegionGeometryCodec.Serialize).SequenceEqual(submitted),
             "Checking freezes the exact learner drawing and reveals the reference only in the read-only comparison view");
@@ -205,9 +209,9 @@ internal static partial class Program
             "Skipping after drawing records a skip without silently comparing the unfinished response");
         CompleteSessionTask(session, session.NextAsync());
         Check(state.IsFinished && state.Summary.Compared == 3 && state.Summary.Skipped == 1 && state.Summary.Answered == 3
-            && state.Summary.RecognitionAnswered == 0 && state.Summary.Accuracy is null
-            && ((TextBlock)session.FindName("ResultsSummary")).Text.Contains("не рассчитана", StringComparison.Ordinal),
-            "Trace-only results separate three comparisons from one skip and do not invent recognition accuracy");
+            && state.Summary.RecognitionAnswered == 0 && state.Summary.Accuracy is null && state.Summary.TraceIncorrect == 3
+            && !((TextBlock)session.FindName("ResultsSummary")).Text.Contains("Распознавание", StringComparison.Ordinal),
+            "Trace-only results separate three incorrect drawings from one skip and do not show recognition accuracy");
         SaveScreenshot(session, Path.Combine(output, "native-trace-results-ru.png"));
         CompleteSessionTask(session, session.ReviewQuestionAsync(3));
         var review = ReviewTraceView(session);
@@ -297,7 +301,7 @@ internal static partial class Program
         Check(state.CurrentQuestion?.Method == TrainingMethod.TraceElement && drawing.IsVisible,
             "The same mixed session advances from a recognition answer to an editable tracing question");
         var heading = ((TextBlock)session.FindName("QuestionHeading")).Text;
-        var languageHost = new HomeWindow(sourceDirectory: null, catalogDirectory: "", rememberLocation: false); languageHost.Show(); Pump();
+        var languageHost = new HomeWindow(catalogPath: "", rememberLocation: false); languageHost.Show(); Pump();
         try
         {
             Click(languageHost, "LanguageButton"); Pump();
@@ -311,13 +315,14 @@ internal static partial class Program
         DrawTraceBox(drawing, RegionEditorTool.Rectangle, new(100, 70), new(150, 170));
         SaveScreenshot(session, Path.Combine(output, "native-trace-drawing-en.png"));
         CompleteSessionTask(session, session.CheckAnswerAsync());
-        Check(((TextBlock)session.FindName("FeedbackText")).Text.Contains("Drawing compared", StringComparison.Ordinal),
-            "English feedback identifies a drawing comparison instead of a correct or incorrect recognition answer");
+        Check(((TextBlock)session.FindName("FeedbackText")).Text.StartsWith("Incorrect", StringComparison.Ordinal)
+            && ((TextBlock)session.FindName("FeedbackText")).Text.Contains("75%", StringComparison.Ordinal),
+            "English drawing feedback gives an incorrect grade and explains the 75 percent threshold");
         CheckTraceFeedbackVisible(session);
         SaveScreenshot(session, Path.Combine(output, "native-trace-feedback-en.png"));
         CompleteSessionTask(session, session.NextAsync());
         RespondToFinish(session, "ConfirmFinishButton");
-        Check(state.Summary.Correct == 1 && state.Summary.Compared == 1 && state.Summary.NotAnswered == 1
+        Check(state.Summary.Correct == 1 && state.Summary.TraceIncorrect == 1 && state.Summary.NotAnswered == 1
             && state.Summary.Answered == 2 && state.Summary.RecognitionAnswered == 1 && state.Summary.Accuracy == 1,
             "Mixed-session accuracy uses only one checked recognition answer while reporting its geometric comparison separately");
         SaveScreenshot(session, Path.Combine(output, "native-trace-results-en.png"));
@@ -364,6 +369,18 @@ internal static partial class Program
             toggle.IsChecked = true; Pump();
         }
         Check(surface.ShowRegions && surface.ShowReferenceRegions, "Both comparison layers can be restored after independent inspection");
+        var learnerHue = (Slider)drawing.FindName("DrawingLearnerHueSlider");
+        var referenceHue = (Slider)drawing.FindName("DrawingReferenceHueSlider");
+        var learnerBrush = surface.RegionStrokeBrush;
+        var referenceBrush = surface.ReferenceStrokeBrush;
+        learnerHue.Value += 35; Pump();
+        Check(learnerHue.IsVisible && surface.RegionStrokeBrush != learnerBrush && surface.ReferenceStrokeBrush == referenceBrush,
+            "The learner hue can be changed independently of the reference outline");
+        learnerBrush = surface.RegionStrokeBrush;
+        referenceHue.Value += 35; Pump();
+        Check(referenceHue.IsVisible && surface.ReferenceStrokeBrush != referenceBrush && surface.RegionStrokeBrush == learnerBrush
+            && SameRegions(surface.Regions, before), "Changing hues does not edit the frozen answer geometry");
+        learnerHue.Value -= 35; referenceHue.Value -= 35; Pump();
     }
 
     private static void CheckTraceFeedbackVisible(TrainingSessionWindow session)

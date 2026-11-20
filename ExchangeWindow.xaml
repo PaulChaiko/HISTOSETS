@@ -1,6 +1,7 @@
-<Window x:Class="HistOSets.ExchangeWindow"
+<fit:WorkAreaWindow x:Class="HistOSets.ExchangeWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:fit="clr-namespace:HistOSets.Controls"
         Width="1120" Height="850" MinWidth="880" MinHeight="680"
         Background="{StaticResource BrandBackgroundBrush}" FontFamily="Segoe UI" FontSize="14"
         WindowStartupLocation="CenterOwner">
@@ -151,4 +152,4 @@
             <Button x:Name="CloseButton" Grid.Column="1" IsCancel="True" VerticalAlignment="Bottom" Margin="0"/>
         </Grid>
     </Grid>
-</Window>
+</fit:WorkAreaWindow>

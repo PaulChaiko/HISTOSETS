@@ -3,7 +3,7 @@ using HistOSets.Services;
 
 namespace HistOSets;
 
-public partial class INFO2 : Window
+public partial class INFO2 : HistOSets.Controls.WorkAreaWindow
 {
     private readonly Func<(string Title, string Description)>? contentResolver;
 

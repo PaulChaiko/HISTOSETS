@@ -21,14 +21,11 @@ internal sealed class ExchangeRow
 internal static class ExchangeSchema
 {
     // Dependency order. Identifiers used in SQL come exclusively from this application-owned list.
-    internal static readonly IReadOnlyList<string> LegacyTableNames = Array.AsReadOnly(new[] {
+    internal static readonly IReadOnlyList<string> TableNames = Array.AsReadOnly(new[] {
         "tag_groups", "tag_group_translations", "tags", "tag_translations", "analog_groups", "analog_group_translations",
         "images", "materials", "material_translations", "material_images", "elements", "element_translations",
-        "regions", "material_tags", "image_calibrations"
+        "regions", "material_tags", "image_calibrations", "training_prompts", "training_prompt_translations"
     });
-    internal static readonly IReadOnlyList<string> TableNames = Array.AsReadOnly(LegacyTableNames.Concat(new[] {
-        "training_prompts", "training_prompt_translations"
-    }).ToArray());
     internal static bool IsTrainingTable(string table) => table is "training_prompts" or "training_prompt_translations";
 
     internal static IReadOnlyList<ExchangeMaterialInfo> MaterialInfo(

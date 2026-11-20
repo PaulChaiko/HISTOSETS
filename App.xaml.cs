@@ -12,7 +12,7 @@ public partial class App : Application
         DispatcherUnhandledException += OnUnhandledException;
         try
         {
-            MainWindow ??= new HomeWindow();
+            MainWindow ??= new HomeWindow(e.Args.Length == 1 ? e.Args[0] : null);
             MainWindow.Show();
         }
         catch (Exception ex)

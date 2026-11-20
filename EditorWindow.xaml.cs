@@ -15,7 +15,7 @@ using Microsoft.Win32;
 namespace HistOSets;
 
 /// <summary>The editor owns a working copy, never the shared catalog connection.</summary>
-public partial class EditorWindow : Window
+public partial class EditorWindow : HistOSets.Controls.WorkAreaWindow
 {
     private readonly CatalogStore store;
     private MaterialDraft draft;
@@ -25,7 +25,6 @@ public partial class EditorWindow : Window
     private const int HistoryLimit = 80;
     private bool rendering;
     private bool initialized;
-    private Guid? selectedImageId;
     private Guid? selectedElementId;
     private string? displayedImagePath;
     private RegionGeometry? measuredGeometry;
@@ -47,13 +46,17 @@ public partial class EditorWindow : Window
         draft = materialId is { } id ? store.LoadMaterialDraft(id) : new MaterialDraft();
         savedFingerprint = Fingerprint(draft);
         InitializeComponent();
+        RadiusRepeatButtons.Configure(BrushRadiusDecrease, BrushRadiusIncrease, () => Surface.BrushRadius, radius =>
+        {
+            Surface.BrushRadius = radius;
+            BrushRadiusInput.Text = radius.ToString("G", DisplayCulture);
+        });
         Surface.Tool = RegionEditorTool.Pan;
         Surface.RegionsChanged += Surface_RegionsChanged;
         Surface.SelectionChanged += (_, _) => RefreshRegionSelection();
         Surface.PendingOperationChanged += (_, _) => UpdateState();
         Surface.OperationFailed += (_, _) => SetStatus("Не удалось применить мазок. Исходная область сохранена; попробуйте более короткий мазок или другой радиус.",
             "The stroke could not be applied. The original region is preserved; try a shorter stroke or a different radius.");
-        selectedImageId = draft.Images.FirstOrDefault(i => i.IsPrimary)?.Id ?? draft.Images.FirstOrDefault()?.Id;
         selectedElementId = draft.Elements.FirstOrDefault()?.Id;
         initialized = true;
         UiLanguage.Changed += Language_Changed;
@@ -61,12 +64,12 @@ public partial class EditorWindow : Window
         RefreshDictionaries();
         Localize();
         Render();
-        Loaded += (_, _) => MaterialRuName.Focus();
+        Loaded += (_, _) => { if (SelectedImage is null) AddImageButton.Focus(); else MaterialRuName.Focus(); };
     }
 
     private static string Fingerprint(MaterialDraft value) => JsonSerializer.Serialize(value);
     private MaterialElementDraft? SelectedElement => draft.Elements.FirstOrDefault(e => e.Id == selectedElementId);
-    private MaterialImageDraft? SelectedImage => draft.Images.FirstOrDefault(i => i.Id == selectedImageId);
+    private MaterialImageDraft? SelectedImage => draft.Images.SingleOrDefault();
     private bool IsDirty => Fingerprint(ReadFields(draft.Clone())) != savedFingerprint;
 
     private static MaterialTextDraft Text(Dictionary<string, MaterialTextDraft> texts, string locale)
@@ -130,7 +133,6 @@ public partial class EditorWindow : Window
             ReadText(draft.Texts, "en", MaterialEnName, MaterialEnSummary, MaterialEnDescription);
             AuthorCredit.Text = draft.AuthorCredit;
             RightsCredit.Text = draft.RightsCredit;
-            if (!draft.Images.Any(i => i.Id == selectedImageId)) selectedImageId = draft.Images.FirstOrDefault(i => i.IsPrimary)?.Id ?? draft.Images.FirstOrDefault()?.Id;
             if (!draft.Elements.Any(e => e.Id == selectedElementId)) selectedElementId = draft.Elements.FirstOrDefault()?.Id;
             RefreshLists();
             RenderElementFields();
@@ -169,10 +171,6 @@ public partial class EditorWindow : Window
 
     private void RefreshLists()
     {
-        ImageList.ItemsSource = draft.Images.Select((i, n) => new Choice(i.Id,
-            (i.IsPrimary ? "★ " : "") + (n + 1) + ". " + Path.GetFileName(i.SourcePath ?? i.ManagedPath ?? "")
-            + (i.Metadata is { } m ? $" ({m.Width} × {m.Height})" : ""))).ToArray();
-        ImageList.SelectedItem = ((IEnumerable<Choice>)ImageList.ItemsSource).FirstOrDefault(c => c.Id == selectedImageId);
         ElementList.ItemsSource = draft.Elements.Select((e, n) => new Choice(e.Id, ElementLabel(e, n))).ToArray();
         ElementList.SelectedItem = ((IEnumerable<Choice>)ElementList.ItemsSource).FirstOrDefault(c => c.Id == selectedElementId);
     }
@@ -195,7 +193,7 @@ public partial class EditorWindow : Window
     private void RenderSurface()
     {
         var image = SelectedImage;
-        var path = image?.SourcePath ?? image?.ManagedPath;
+        var path = image?.SourcePath ?? image?.ImageId?.ToString();
         if (path != displayedImagePath)
         {
             displayedImagePath = null;
@@ -204,7 +202,7 @@ public partial class EditorWindow : Window
             {
                 try
                 {
-                    var loaded = ImageLoader.Load(path);
+                    var loaded = image!.SourcePath is { } source ? ImageLoader.Load(source) : ImageLoader.Load(store, image.ImageId!.Value);
                     Surface.ImageWidth = loaded.PixelWidth;
                     Surface.ImageHeight = loaded.PixelHeight;
                     Surface.ImageSource = loaded.Bitmap;
@@ -215,7 +213,7 @@ public partial class EditorWindow : Window
             }
         }
         Surface.CanEdit = image is not null && SelectedElement is not null && Surface.ImageSource is not null;
-        Surface.Regions = SelectedElement?.Regions.Where(r => r.MaterialImageId == selectedImageId)
+        Surface.Regions = SelectedElement?.Regions.Where(r => r.MaterialImageId == image?.Id)
             .Select(r => new AtlasRegion(r.Id, r.Geometry)).ToArray() ?? [];
         RefreshRegions();
     }
@@ -226,7 +224,8 @@ public partial class EditorWindow : Window
         rendering = true;
         try
         {
-            RegionList.ItemsSource = (SelectedElement?.Regions.Where(r => r.MaterialImageId == selectedImageId) ?? [])
+            var imageId = SelectedImage?.Id;
+            RegionList.ItemsSource = (SelectedElement?.Regions.Where(r => r.MaterialImageId == imageId) ?? [])
                 .Select((r, n) => new Choice(r.Id, $"{n + 1}. {GeometryName(r.Geometry.Kind)}")).ToArray();
             RegionList.SelectedItem = ((IEnumerable<Choice>)RegionList.ItemsSource).FirstOrDefault(c => c.Id == Surface.SelectedRegionId);
         }
@@ -254,9 +253,14 @@ public partial class EditorWindow : Window
             (draft.Status == "ready" ? T("Готов", "Ready") : T("Черновик", "Draft"));
         UndoButton.IsEnabled = undo.Count > 0 || Fingerprint(ReadFields(draft.Clone())) != Fingerprint(draft);
         RedoButton.IsEnabled = redo.Count > 0;
-        PrimaryImageButton.IsEnabled = SelectedImage is { IsPrimary: false };
-        RemoveImageButton.IsEnabled = SelectedImage is not null;
-        CalibrationButton.IsEnabled = SelectedImage?.Metadata is not null;
+        var image = SelectedImage;
+        AddImageButton.Content = image is null ? T("Добавить изображение…", "Add image…") : T("Заменить изображение…", "Replace image…");
+        ImageSummary.Text = image is null ? T("Изображение не добавлено", "No image added")
+            : image.Metadata is { } metadata ? $"{metadata.Width:N0} × {metadata.Height:N0} px"
+            : T("Размер изображения неизвестен", "Image size is unknown");
+        if (image?.SourcePath is { } source) ImageSummary.Text = Path.GetFileName(source) + " · " + ImageSummary.Text;
+        RemoveImageButton.IsEnabled = image is not null;
+        CalibrationButton.IsEnabled = image?.Metadata is not null;
         DeleteElementButton.IsEnabled = SelectedElement is not null;
         MaterialTrainingSummary.Text = TrainingSummary(draft.TrainingPrompts);
         ElementTrainingSummary.Text = SelectedElement is { } promptElement ? TrainingSummary(promptElement.TrainingPrompts) : "";
@@ -266,19 +270,19 @@ public partial class EditorWindow : Window
         RectangleTool.IsEnabled = EllipseTool.IsEnabled = PolygonTool.IsEnabled = SelectTool.IsEnabled = BrushTool.IsEnabled = Surface.CanEdit;
         EraserTool.IsEnabled = Surface.CanEdit && Surface.SelectedRegionId is not null;
         NewRegionButton.IsEnabled = Surface.CanEdit;
-        BrushRadiusInput.IsEnabled = Surface.CanEdit;
+        BrushRadiusDecrease.IsEnabled = BrushRadiusIncrease.IsEnabled = BrushRadiusInput.IsEnabled = Surface.CanEdit && !Surface.HasPendingOperation;
         RefreshMeasurements();
         CanvasHint.Text = Surface.HasPendingPolygon
-            ? T("Контур ещё не завершён. Enter или «Завершить» — сохранить контур; Esc — отменить его. Масштаб меняется колесом мыши.",
-                "The contour is unfinished. Enter or Finish completes it; Esc cancels it. Use the mouse wheel to zoom.")
+            ? T("Контур ещё не завершён. Enter — завершить, Esc — отменить. Колесо — масштаб; правая кнопка мыши — перемещение.",
+                "The contour is unfinished. Enter finishes it; Esc cancels it. Wheel: zoom; right drag: pan.")
             : SelectedImage is null ? T("Добавьте изображение. Его оригинал будет скопирован в каталог при сохранении.", "Add an image. Its original will be copied into the catalog when you save.")
-            : SelectedElement is null ? T("Добавьте или выберите элемент, чтобы нанести его области. Колесо мыши — масштаб; «Перемещение» — панорамирование.",
-                "Add or select an element to draw its regions. Mouse wheel: zoom; Pan: move the image.")
+            : SelectedElement is null ? T("Добавьте или выберите элемент, чтобы нанести его области. Колесо — масштаб; правая кнопка мыши — перемещение.",
+                "Add or select an element to draw its regions. Wheel: zoom; right drag: pan.")
             : Surface.Tool is RegionEditorTool.Brush or RegionEditorTool.Eraser
-                ? T("Кисть добавляет к выбранной области; «Новая область кистью» начинает отдельную. Ластик вычитает только из выбранной области, включая отверстия. Отпустите кнопку мыши, чтобы закончить мазок; Esc отменяет его.",
-                    "Brush adds to the selected region; New brush region starts a separate one. Eraser subtracts only from the selected region and can create holes. Release the mouse button to finish a stroke; Esc cancels it.")
-            : T("Показаны области выбранного элемента на текущем изображении. Выбор: перемещение фигуры и её узлов. Полигон: щелчки, затем Enter. Esc отменяет незавершённое действие.",
-                "Regions belong to the selected element and current image. Select: move a shape or its handles. Polygon: click vertices, then Enter. Esc cancels the current operation.");
+                ? T("Кисть дополняет выбранную область, ластик вычитает из неё. Esc отменяет мазок. Правая кнопка мыши перемещает изображение.",
+                    "The brush adds to the selected region; the eraser subtracts from it. Esc cancels the stroke. Right drag pans the image.")
+            : T("Инструмент «Выбор» перемещает фигуру и её узлы. Полигон: щелчки, затем Enter. Esc отменяет действие. Правая кнопка мыши перемещает изображение.",
+                "Select moves a shape or its handles. Polygon: click vertices, then Enter. Esc cancels. Right drag pans the image.");
     }
 
     private static CultureInfo DisplayCulture => CultureInfo.GetCultureInfo(UiLanguage.Locale == "ru" ? "ru-RU" : "en-US");
@@ -298,7 +302,8 @@ public partial class EditorWindow : Window
             ? T("Калибровка не задана: измерения в пикселях оригинала.", "No calibration: measurements use original image pixels.")
             : T($"Масштаб изображения: X ≈ {Number(scaleX)} {unitLabel}/px; Y ≈ {Number(scaleY)} {unitLabel}/px.",
                 $"Image scale: X ≈ {Number(scaleX)} {unitLabel}/px; Y ≈ {Number(scaleY)} {unitLabel}/px.");
-        var region = SelectedElement?.Regions.FirstOrDefault(r => r.MaterialImageId == selectedImageId && r.Id == Surface.SelectedRegionId);
+        var imageId = SelectedImage?.Id;
+        var region = SelectedElement?.Regions.FirstOrDefault(r => r.MaterialImageId == imageId && r.Id == Surface.SelectedRegionId);
         if (region is null)
         {
             MeasurementSummary.Text = T("Выберите область для расчёта площади и периметра.", "Select a region to calculate its area and perimeter.");
@@ -313,8 +318,9 @@ public partial class EditorWindow : Window
                 measuredCalibration = calibration;
             }
             var measurement = measuredValue.Value;
-            MeasurementSummary.Text = T($"Площадь ≈ {Number(measurement.Area)} {unitLabel}² · Периметр ≈ {Number(measurement.Perimeter)} {unitLabel}",
-                $"Area ≈ {Number(measurement.Area)} {unitLabel}² · Perimeter ≈ {Number(measurement.Perimeter)} {unitLabel}");
+            var area = MeasurementDisplay.Area(measurement.Area, DisplayCulture);
+            MeasurementSummary.Text = T($"Площадь ≈ {area} {unitLabel}² · Периметр ≈ {Number(measurement.Perimeter)} {unitLabel}",
+                $"Area ≈ {area} {unitLabel}² · Perimeter ≈ {Number(measurement.Perimeter)} {unitLabel}");
         }
         catch (ArgumentException)
         {
@@ -327,16 +333,6 @@ public partial class EditorWindow : Window
     {
         if (!initialized || rendering) return;
         FlushFields();
-    }
-
-    private void Image_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (!initialized || rendering) return;
-        var next = (ImageList.SelectedItem as Choice)?.Id;
-        if (!ResolvePending()) { RestoreSelection(ImageList, selectedImageId); return; }
-        FlushFields();
-        selectedImageId = next;
-        Render();
     }
 
     private void Element_Changed(object sender, SelectionChangedEventArgs e)
@@ -366,7 +362,12 @@ public partial class EditorWindow : Window
     private void AddImage_Click(object sender, RoutedEventArgs e)
     {
         if (!ResolvePending()) return;
-        var dialog = new OpenFileDialog { Title = T("Добавить изображение", "Add image"), Filter = T("Изображения|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp|Все файлы|*.*", "Images|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp|All files|*.*"), CheckFileExists = true };
+        var dialog = new OpenFileDialog
+        {
+            Title = SelectedImage is null ? T("Добавить изображение", "Add image") : T("Заменить изображение", "Replace image"),
+            Filter = T("Изображения|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.gif|Все файлы|*.*", "Images|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp;*.gif|All files|*.*"),
+            CheckFileExists = true
+        };
         if (dialog.ShowDialog(this) == true) AddImageFromPath(dialog.FileName);
     }
 
@@ -379,6 +380,12 @@ public partial class EditorWindow : Window
             path = Path.GetFullPath(path);
             using var sourceGuard = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             var hash = Convert.ToHexStringLower(SHA256.HashData(sourceGuard));
+            var previous = SelectedImage;
+            if (previous is not null && string.Equals(hash, previous.SourceSha256 ?? previous.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus("Это изображение уже добавлено. Разметка и калибровка сохранены.", "This image is already selected. Its regions and calibration are unchanged.");
+                return;
+            }
             var metadata = ImageLoader.ReadMetadata(path);
             if (metadata.Width <= 0 || metadata.Height <= 0 || metadata.Orientation != 1)
                 throw new InvalidDataException(T("Сначала сохраните изображение с правильной ориентацией без EXIF-поворота.", "First save the image in its correct orientation without EXIF rotation."));
@@ -387,17 +394,19 @@ public partial class EditorWindow : Window
             sourceGuard.Position = 0;
             if (Convert.ToHexStringLower(SHA256.HashData(sourceGuard)) != hash)
                 throw new InvalidDataException(T("Изображение изменилось во время загрузки. Добавьте его заново.", "The image changed while loading. Add it again."));
-            var image = new MaterialImageDraft { SourcePath = path, SourceSha256 = hash, Metadata = metadata, IsPrimary = draft.Images.Count == 0 };
-            Change(() => { draft.Images.Add(image); selectedImageId = image.Id; });
-            SetStatus("Изображение добавлено в рабочую копию. Сохраните объект, чтобы записать его в каталог.", "Image added to the working copy. Save the object to store it in the catalog.");
+            if (previous is not null && !ConfirmImageChange(previous, replacing: true)) return;
+            var image = new MaterialImageDraft { SourcePath = path, SourceSha256 = hash, Metadata = metadata, IsPrimary = true };
+            Change(() =>
+            {
+                if (previous is not null) RemoveImage(previous);
+                draft.Images.Add(image);
+            });
+            if (previous is null)
+                SetStatus("Изображение добавлено в рабочую копию. Сохраните объект, чтобы записать его в каталог.", "Image added to the working copy. Save the object to store it in the catalog.");
+            else
+                SetStatus("Изображение заменено в рабочей копии. До сохранения замену можно отменить.", "Image replaced in the working copy. You can undo the replacement before saving.");
         }
         catch (Exception ex) { ShowError(ex); }
-    }
-
-    private void PrimaryImage_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedImage is not { } image || !ResolvePending()) return;
-        Change(() => { foreach (var candidate in draft.Images) candidate.IsPrimary = candidate.Id == image.Id; });
     }
 
     private void Calibration_Click(object sender, RoutedEventArgs e)
@@ -418,18 +427,26 @@ public partial class EditorWindow : Window
     private void RemoveImage_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedImage is not { } image || !ResolvePending()) return;
+        if (ConfirmImageChange(image, replacing: false)) Change(() => RemoveImage(image));
+    }
+
+    private bool ConfirmImageChange(MaterialImageDraft image, bool replacing)
+    {
         var regions = draft.Elements.Sum(element => element.Regions.Count(region => region.MaterialImageId == image.Id));
-        var question = regions == 0
-            ? T("Удалить изображение из объекта? Изменение применится при сохранении.", "Remove this image from the object? This change takes effect when you save.")
-            : T($"Удалить изображение и все связанные с ним области ({regions})? Калибровка также будет удалена. Изменение применится при сохранении.",
-                $"Remove this image and all {regions} regions linked to it? Its calibration will also be removed. This change takes effect when you save.");
-        if (MessageBox.Show(this, question, "HISTOSETS", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-        Change(() =>
-        {
-            draft.Images.Remove(image);
-            foreach (var element in draft.Elements) element.Regions.RemoveAll(r => r.MaterialImageId == image.Id);
-            if (image.IsPrimary && draft.Images.Count > 0) draft.Images[0].IsPrimary = true;
-        });
+        var title = replacing ? T("Заменить изображение", "Replace image") : T("Удалить изображение", "Remove image");
+        var question = replacing ? T("У объекта будет новое изображение.", "The object will use a new image.")
+            : T("Объект останется без изображения.", "The object will have no image.");
+        if (regions > 0) question += T($" Связанные области ({regions}) будут удалены.", $" The associated regions ({regions}) will be removed.");
+        if (image.Calibration is not null) question += T(" Калибровка будет удалена.", " The calibration will be removed.");
+        question += T(" Изменение применится при сохранении объекта.", " The change takes effect when you save the object.");
+        var action = replacing ? T("Заменить", "Replace") : T("Удалить", "Remove");
+        return new EditorImageChangePrompt(title, question, action) { Owner = this }.ShowDialog() == true;
+    }
+
+    private void RemoveImage(MaterialImageDraft image)
+    {
+        draft.Images.Remove(image);
+        foreach (var element in draft.Elements) element.Regions.RemoveAll(r => r.MaterialImageId == image.Id);
     }
 
     private void AddElement_Click(object sender, RoutedEventArgs e)
@@ -507,7 +524,8 @@ public partial class EditorWindow : Window
 
     private bool ApplyBrushRadius()
     {
-        if (!ImageCalibrationDialog.TryPositiveNumber(BrushRadiusInput.Text, out var radius) || radius < 0.01 || radius > 1e9)
+        if (!ImageCalibrationDialog.TryPositiveNumber(BrushRadiusInput.Text, out var radius)
+            || radius < RadiusRepeatButtons.Minimum || radius > RadiusRepeatButtons.Maximum)
         {
             SetStatus("Радиус кисти и ластика должен быть числом от 0,01 до 1 000 000 000 пикселей оригинала. Предыдущий радиус не изменён.",
                 "Brush and eraser radius must be a number from 0.01 to 1,000,000,000 original image pixels. The previous radius is unchanged.");
@@ -545,7 +563,7 @@ public partial class EditorWindow : Window
 
     private void Surface_RegionsChanged(object? sender, RegionsChangedEventArgs e)
     {
-        if (!initialized || rendering || SelectedElement is not { } element || selectedImageId is not { } imageId) return;
+        if (!initialized || rendering || SelectedElement is not { } element || SelectedImage?.Id is not { } imageId) return;
         Change(() =>
         {
             element.Regions.RemoveAll(r => r.MaterialImageId == imageId);
@@ -675,8 +693,7 @@ public partial class EditorWindow : Window
         try
         {
             var types = new List<TypeChoice> { new(null, T("Все типы", "All types"), true) };
-            types.AddRange(taxonomy.Groups.OrderByDescending(g => g.IsSystem).Select(g => new TypeChoice(g.Id, CatalogBrowser.Label(g.Names, UiLanguage.Locale))));
-            if (taxonomy.Tags.Any(t => t.GroupId is null)) types.Add(new(null, T("Без типа (старые теги)", "Untyped (legacy tags)")));
+            types.AddRange(taxonomy.Groups.Where(g => g.IsSystem).Select(g => new TypeChoice(g.Id, CatalogBrowser.Label(g.Names, UiLanguage.Locale))));
             TagTypeList.ItemsSource = types;
             TagTypeList.SelectedItem = types.FirstOrDefault(t => t.Id == selected?.Id && t.All == selected?.All) ?? types[0];
         }
@@ -700,7 +717,11 @@ public partial class EditorWindow : Window
 
     private void AddTagChoice(Guid id, string label)
     {
-        var checkbox = new CheckBox { Content = label, Tag = id, IsChecked = draft.TagIds.Contains(id), Margin = new Thickness(0, 3, 0, 3) };
+        var checkbox = new CheckBox
+        {
+            Content = new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap },
+            Tag = id, IsChecked = draft.TagIds.Contains(id), Margin = new Thickness(0, 3, 0, 3)
+        };
         checkbox.Checked += (_, _) => { if (!rendering) Change(() => draft.TagIds.Add(id), render: false); };
         checkbox.Unchecked += (_, _) => { if (!rendering) Change(() => draft.TagIds.Remove(id), render: false); };
         TagChoices.Children.Add(checkbox);
@@ -724,7 +745,14 @@ public partial class EditorWindow : Window
             (TagTypeList.SelectedItem as TypeChoice)?.Id, (ru, en, group) => created = store.SaveTag(null, group, ru, en), requireBoth: true) { Owner = this };
         if (dialog.ShowDialog() != true) return;
         RefreshDictionaries();
-        if (created is { } id) Change(() => draft.TagIds.Add(id)); else Render();
+        if (created is { } id)
+        {
+            TagSearch.Clear();
+            var newType = taxonomy.Tags.Single(t => t.Id == id).GroupId;
+            TagTypeList.SelectedItem = TagTypeList.Items.Cast<TypeChoice>().First(t => t.Id == newType);
+            Change(() => draft.TagIds.Add(id));
+        }
+        else Render();
     }
 
     private void NewAnalog_Click(object sender, RoutedEventArgs e)
@@ -772,9 +800,7 @@ public partial class EditorWindow : Window
         UndoButton.Content = T("Отменить", "Undo"); UndoButton.ToolTip = "Ctrl+Z";
         RedoButton.Content = T("Повторить", "Redo"); RedoButton.ToolTip = "Ctrl+Y";
         CloseButton.Content = T("Закрыть", "Close");
-        ImageHeading.Text = T("Изображения объекта", "Object images");
-        AddImageButton.Content = T("Добавить изображение…", "Add image…");
-        PrimaryImageButton.Content = T("Сделать основным", "Set as primary");
+        ImageHeading.Text = T("Изображение объекта", "Object image");
         RemoveImageButton.Content = T("Удалить изображение", "Remove image");
         CalibrationButton.Content = T("Калибровка…", "Calibration…");
         CalibrationButton.ToolTip = T("Известные физические размеры всего изображения. DPI не используется.", "Known physical dimensions of the whole image. DPI is not used.");
@@ -785,24 +811,25 @@ public partial class EditorWindow : Window
         BrushRadiusInput.ToolTip = T("Радиус в пикселях оригинала; при изменении масштаба не меняется. Допустимы точка или запятая.",
             "Radius in original image pixels; zoom does not change it. A decimal point or comma is accepted.");
         System.Windows.Automation.AutomationProperties.SetName(BrushRadiusInput, BrushRadiusLabel.Text);
+        RadiusRepeatButtons.Localize(BrushRadiusDecrease, BrushRadiusIncrease, T);
         NewRegionButton.Content = T("Новая область кистью", "New brush region");
         NewRegionButton.ToolTip = T("Снять выделение и начать отдельную область кистью. Существующие области сохраняются.",
             "Clear the selection and start a separate brush region. Existing regions are preserved.");
-        MeasurementSummary.ToolTip = T("Расчёт по нанесённому контуру, а не оценка точности. Площадь исключает отверстия; периметр включает их границы. Значения показаны примерно с четырьмя значащими цифрами.",
-            "Calculated from the drawn contour, not an accuracy estimate. Area excludes holes; perimeter includes their boundaries. Values are shown to about four significant figures.");
+        MeasurementSummary.ToolTip = T("Площадь рассчитана по контуру без отверстий и округлена вверх до сотых. Периметр включает границы отверстий.",
+            "Area excludes holes and is rounded up to the nearest hundredth. Perimeter includes hole boundaries.");
         FitButton.Content = T("Вписать", "Fit"); ActualSizeButton.ToolTip = T("Один пиксель изображения на единицу экрана", "One image pixel per screen unit");
         FinishPolygonButton.Content = T("Завершить", "Finish"); CancelPolygonButton.Content = T("Отменить действие", "Cancel action");
         DeleteRegionButton.Content = T("Удалить область", "Delete region");
         ObjectTab.Header = T("Объект", "Object"); ElementsTab.Header = T("Элементы", "Elements"); MetadataTab.Header = T("Метаданные", "Metadata");
-        MaterialHelp.Text = T("Черновик допускает неполные данные. Для готовности заполните все поля RU и EN, добавьте основное изображение и описания элементов.",
-            "Drafts may be incomplete. To mark an object ready, fill all RU and EN fields, add a primary image and complete element descriptions.");
+        MaterialHelp.Text = T("У объекта одно изображение. Для готовности добавьте его и заполните все поля RU и EN и описания элементов. Черновик может быть неполным.",
+            "Each object has one image. To mark the object ready, add its image and complete all RU and EN fields and element descriptions. Drafts may be incomplete.");
         MaterialTrainingButton.Content = T("Учебные описания объекта…", "Object training descriptions…");
         ElementTrainingButton.Content = T("Учебные описания элемента…", "Element training descriptions…");
         foreach (var label in new[] { MaterialRuNameLabel, MaterialEnNameLabel, ElementRuNameLabel, ElementEnNameLabel }) label.Text = T("Название", "Name");
         foreach (var label in new[] { MaterialRuSummaryLabel, MaterialEnSummaryLabel, ElementRuSummaryLabel, ElementEnSummaryLabel }) label.Text = T("Краткое описание", "Summary");
         foreach (var label in new[] { MaterialRuDescriptionLabel, MaterialEnDescriptionLabel, ElementRuDescriptionLabel, ElementEnDescriptionLabel }) label.Text = T("Подробное описание", "Full description");
         AddElementButton.Content = T("Добавить элемент", "Add element"); DeleteElementButton.Content = T("Удалить", "Delete");
-        RegionsHeading.Text = T("Области на текущем изображении", "Regions on the current image");
+        RegionsHeading.Text = T("Области элемента", "Element regions");
         AnalogLabel.Text = T("Группа аналогов", "Analog group"); NewAnalogButton.Content = T("Создать группу…", "Create group…");
         TagTypeLabel.Text = T("Типовые теги", "Typed tags"); TagSearch.ToolTip = T("Поиск по RU и EN", "Search RU and EN");
         System.Windows.Automation.AutomationProperties.SetName(TagSearch, T("Поиск тегов", "Search tags"));
@@ -814,8 +841,35 @@ public partial class EditorWindow : Window
     }
 }
 
+internal sealed class EditorImageChangePrompt : WorkAreaWindow
+{
+    public EditorImageChangePrompt(string title, string message, string action)
+    {
+        NameScope.SetNameScope(this, new NameScope());
+        Title = title;
+        Width = 510;
+        SizeToContent = SizeToContent.Height;
+        ResizeMode = ResizeMode.NoResize;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        var panel = new StackPanel { Margin = new Thickness(20) };
+        panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 18) });
+        var buttons = new WrapPanel();
+        var confirm = new Button { Name = "ConfirmImageChangeButton", Content = action };
+        var cancel = new Button { Name = "CancelImageChangeButton", Content = UiLanguage.T("Отмена", "Cancel"), IsCancel = true, IsDefault = true };
+        confirm.Click += (_, _) => DialogResult = true;
+        cancel.Click += (_, _) => DialogResult = false;
+        RegisterName(confirm.Name, confirm);
+        RegisterName(cancel.Name, cancel);
+        buttons.Children.Add(confirm);
+        buttons.Children.Add(cancel);
+        panel.Children.Add(buttons);
+        Content = panel;
+        Loaded += (_, _) => cancel.Focus();
+    }
+}
+
 internal enum EditorCloseDecision { Cancel, Save, Discard }
-internal sealed class EditorClosePrompt : Window
+internal sealed class EditorClosePrompt : HistOSets.Controls.WorkAreaWindow
 {
     public EditorCloseDecision Decision { get; private set; }
     public EditorClosePrompt()
@@ -842,7 +896,7 @@ internal sealed class EditorClosePrompt : Window
 }
 
 internal enum EditorPendingDecision { Continue, Finish, CancelStroke }
-internal sealed class EditorPendingPrompt : Window
+internal sealed class EditorPendingPrompt : HistOSets.Controls.WorkAreaWindow
 {
     public EditorPendingDecision Decision { get; private set; }
     public EditorPendingPrompt(bool canFinish = true)

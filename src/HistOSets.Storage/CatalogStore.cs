@@ -10,67 +10,61 @@ public sealed partial class CatalogStore : IDisposable
     private readonly FileStream ownership;
     private readonly object gate = new();
     private bool disposed;
-    public string RootDirectory { get; }
-    public string DatabasePath => Path.Combine(RootDirectory, "catalog.sqlite");
-    public string? LastMigrationBackupPath { get; private set; }
+    public string RootDirectory => Path.GetDirectoryName(DatabasePath)!;
+    public string DatabasePath { get; }
 
-    public CatalogStore(string rootDirectory)
+    public CatalogStore(string databasePath)
     {
-        RootDirectory = Path.GetFullPath(rootDirectory);
-        Directory.CreateDirectory(RootDirectory);
-        if (!File.Exists(DatabasePath) && Directory.EnumerateFileSystemEntries(RootDirectory).Any())
-            throw new CatalogStorageException("В непустой папке отсутствует catalog.sqlite. Автоматическое создание отменено, чтобы не заменить утраченный каталог. Восстановите копию или выберите пустую папку.");
+        DatabasePath = Path.GetFullPath(databasePath);
+        if (!File.Exists(DatabasePath))
+            throw new CatalogStorageException("Файл каталога не найден. Выберите существующий .histosets или создайте новый.");
+        var key = OperatingSystem.IsWindows() ? DatabasePath.ToUpperInvariant() : DatabasePath;
+        var lockDirectory = Path.Combine(Path.GetTempPath(), "histosets-file-locks");
+        Directory.CreateDirectory(lockDirectory);
         try
         {
-            ownership = new FileStream(Path.Combine(RootDirectory, "catalog.lock"), FileMode.OpenOrCreate,
+            ownership = new FileStream(Path.Combine(lockDirectory, StorageFiles.Id(key)), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.None);
         }
         catch (IOException ex)
         {
-            throw new CatalogStorageException("Каталог занят другим экземпляром HISTOSETS либо недоступен для записи.", ex);
+            throw new CatalogStorageException("Каталог уже открыт другим экземпляром HISTOSETS либо занят.", ex);
         }
         try
         {
-            if (!File.Exists(DatabasePath))
-            {
-                // A database is installed only after the full schema transaction succeeds.
-                var temporary = DatabasePath + ".creating-" + Guid.NewGuid().ToString("N");
-                try { Create(temporary, DefaultCatalogName(RootDirectory)); File.Move(temporary, DatabasePath); }
-                finally { if (File.Exists(temporary)) File.Delete(temporary); }
-            }
-            int version;
-            using (var connection = Open(DatabasePath))
-            {
-                Validate(connection, allowLegacy: true);
-                version = SchemaVersion(connection);
-            }
-            if (version < CatalogDatabase.Version)
-            {
-                var backups = Path.Combine(RootDirectory, "BACKUPS");
-                Directory.CreateDirectory(backups);
-                var path = Path.Combine(backups, "before-schema6-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".histosets");
-                // This snapshot must contain every referenced file before the first database write.
-                CreateBackup(path);
-                LastMigrationBackupPath = path;
-                try
-                {
-                    using var connection = Open(DatabasePath, SqliteOpenMode.ReadWrite);
-                    using var transaction = connection.BeginTransaction();
-                    if (version == 1) ApplyVersion2(connection, transaction, DefaultCatalogName(RootDirectory));
-                    if (version < 3) ApplyVersion3(connection, transaction);
-                    if (version < 4) ApplyVersion4(connection, transaction);
-                    if (version < 5) ApplyVersion5(connection, transaction);
-                    ApplyVersion6(connection, transaction);
-                    Validate(connection, transaction: transaction);
-                    transaction.Commit();
-                }
-                catch (Exception ex) when (ex is SqliteException or CatalogStorageException or ArgumentException or FormatException)
-                {
-                    throw new CatalogStorageException("Не удалось обновить структуру каталога. Резервная копия: " + path, ex);
-                }
-            }
+            using var connection = Open(DatabasePath);
+            Validate(connection, deep: true);
+            VerifyImageContents(connection);
         }
         catch { ownership.Dispose(); throw; }
+    }
+
+    public static void CreateCatalog(string path, string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 200)
+            throw new CatalogStorageException("Введите название каталога длиной от 1 до 200 символов.");
+        PublishFile(path, partial => Create(partial, name.Trim()));
+    }
+
+    internal static void PublishFile(string destination, Action<string> write)
+    {
+        destination = Path.GetFullPath(destination);
+        if (!string.Equals(Path.GetExtension(destination), ".histosets", StringComparison.OrdinalIgnoreCase))
+            throw new CatalogStorageException("Выберите имя файла с расширением .histosets.");
+        if (File.Exists(destination) || Directory.Exists(destination))
+            throw new CatalogStorageException("Этот путь уже занят. Выберите новое имя файла каталога.");
+        var partial = destination + ".partial-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            write(partial);
+            File.Move(partial, destination);
+        }
+        finally
+        {
+            foreach (var path in new[] { partial, partial + "-journal", partial + "-wal", partial + "-shm" })
+                try { File.Delete(path); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
     }
 
     public CatalogStatistics GetStatistics()
@@ -97,18 +91,19 @@ public sealed partial class CatalogStore : IDisposable
             using var connection = Open(DatabasePath);
             Validate(connection);
             var warnings = new List<string>();
-            var assets = new Dictionary<string, (string Path, string? Issue)>();
-            using (var command = Command(connection, "SELECT id, storage_key, sha256, byte_size FROM images WHERE deleted_utc IS NULL;"))
+            var assets = new Dictionary<string, (string Key, string? Issue)>();
+            using (var command = Command(connection, """
+                SELECT i.id,i.storage_key,i.byte_size,length(c.data) FROM images i
+                LEFT JOIN image_contents c ON c.image_id=i.id WHERE i.deleted_utc IS NULL;
+                """))
             using (var reader = command.ExecuteReader())
                 while (reader.Read())
                 {
-                    var path = StorageFiles.Resolve(RootDirectory, reader.GetString(1));
-                    string? issue = null;
-                    if (!File.Exists(path)) issue = "Не найдено изображение «" + reader.GetString(1) + "». Восстановите резервную копию.";
-                    else if (new FileInfo(path).Length != reader.GetInt64(3) || StorageFiles.Hash(path) != reader.GetString(2))
-                        issue = "Изображение изменено вне HISTOSETS. Показ остановлен, чтобы не сместить контуры: " + reader.GetString(1);
+                    var key = reader.GetString(1);
+                    var issue = reader.IsDBNull(3) || reader.GetInt64(3) != reader.GetInt64(2)
+                        ? "Изображение отсутствует или повреждено: " + key : null;
                     if (issue is not null) warnings.Add(issue);
-                    assets.Add(reader.GetString(0), (path, issue));
+                    assets.Add(reader.GetString(0), (key, issue));
                 }
             var specimens = new List<AtlasSpecimen>();
             var analogNames = ReadNames(connection, "analog_group_translations", "group_id");
@@ -128,7 +123,7 @@ public sealed partial class CatalogStore : IDisposable
                     var locale = reader.GetString(1);
                     var elements = ReadElements(connection, material, locale, reader.GetString(5));
                     var asset = assets[reader.GetString(6)];
-                    specimens.Add(new(reader.GetString(2), asset.Path, reader.GetString(3), reader.GetString(4), CoordinateSpace.Pixels, elements)
+                    specimens.Add(new(reader.GetString(2), asset.Key, reader.GetString(3), reader.GetString(4), CoordinateSpace.Pixels, elements)
                     {
                         MaterialId = Guid.Parse(material), ImageId = Guid.Parse(reader.GetString(6)), Locale = locale, ImageIssue = asset.Issue,
                         MaterialImageId = Guid.Parse(reader.GetString(5)), Status = reader.GetString(7), IsPrimaryImage = reader.GetBoolean(8),

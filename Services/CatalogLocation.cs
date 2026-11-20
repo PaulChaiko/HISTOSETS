@@ -17,17 +17,13 @@ internal static class CatalogLocation
         return null;
     }
 
-    // Kept for the standalone viewer and older launch integrations. Home checks
-    // whether this database exists before opening it; it never recreates a missing selection.
-    internal static string Load() => LoadSaved() ?? DefaultDirectory;
-
-    internal static void Save(string directory)
+    internal static void Save(string path)
     {
         Directory.CreateDirectory(HomeDirectory);
         var temporary = SettingsPath + "." + Guid.NewGuid().ToString("N");
         try
         {
-            File.WriteAllText(temporary, Path.GetFullPath(directory));
+            File.WriteAllText(temporary, Path.GetFullPath(path));
             File.Move(temporary, SettingsPath, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }

@@ -13,7 +13,7 @@ public sealed partial class CatalogStore
     /// per original, and failures remain per-image eligibility issues rather than hiding the whole card.
     /// Supplying a decoder additionally verifies that the pixels match the stored dimensions and format.
     /// </summary>
-    public TrainingCatalog CaptureTrainingCatalog(Func<string, ImageMetadata>? readMetadata = null)
+    public TrainingCatalog CaptureTrainingCatalog(Func<Stream, ImageMetadata>? readMetadata = null)
     {
         lock (gate)
         {
@@ -51,7 +51,7 @@ public sealed partial class CatalogStore
                 while (reader.Read())
                 {
                     var imageId = reader.GetString(0);
-                    var asset = InspectTrainingImage(reader.GetString(1), reader.GetString(2), reader.GetInt64(3),
+                    var asset = InspectTrainingImage(connection, transaction, imageId, reader.GetString(1), reader.GetString(2),
                         new(reader.GetInt32(4), reader.GetInt32(5), reader.GetDouble(6), reader.GetDouble(7), reader.GetString(8), reader.GetInt32(9)),
                         !reader.IsDBNull(10), readMetadata);
                     verified.Add(imageId, asset);
@@ -74,7 +74,7 @@ public sealed partial class CatalogStore
                             var asset = verified[imageReader.GetString(1)];
                             images.Add(new(Guid.Parse(imageReader.GetString(0)), Guid.Parse(imageReader.GetString(1)), asset.ExpectedHash,
                                 imageReader.GetBoolean(2), imageReader.GetInt32(3), asset.Width, asset.Height,
-                                asset.Issue is null, asset.Issue, asset.Path));
+                                asset.Issue is null, asset.Issue));
                         }
                     var elements = new List<TrainingElement>();
                     using (var elementCommand = Command(connection, "SELECT id,sort_order FROM elements WHERE material_id=$id AND deleted_utc IS NULL ORDER BY sort_order,id;",
@@ -110,46 +110,42 @@ public sealed partial class CatalogStore
         }
     }
 
-    private sealed record TrainingAsset(string? Path, string ExpectedHash, string? ObservedHash, int Width, int Height, string? Issue);
+    private sealed record TrainingAsset(string ExpectedHash, string? ObservedHash, int Width, int Height, string? Issue);
 
-    private TrainingAsset InspectTrainingImage(string key, string hash, long size, ImageMetadata expected,
-        bool deleted, Func<string, ImageMetadata>? readMetadata)
+    private static TrainingAsset InspectTrainingImage(SqliteConnection connection, SqliteTransaction transaction,
+        string id, string key, string hash, ImageMetadata expected, bool deleted, Func<Stream, ImageMetadata>? readMetadata)
     {
-        string? path = null, observed = null, issue = null;
+        string? observed = null, issue = null;
         try
         {
-            path = StorageFiles.Resolve(RootDirectory, key);
             if (deleted) issue = "Изображение удалено из каталога: " + key;
-            else if (!File.Exists(path)) issue = "Не найдено изображение: " + key;
             else
             {
-                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                observed = Convert.ToHexStringLower(SHA256.HashData(stream));
-                if (stream.Length != size || !string.Equals(observed, hash, StringComparison.OrdinalIgnoreCase))
-                    issue = "Изображение изменено вне HISTOSETS: " + key;
-                else if (readMetadata is not null)
+                // Preparation only checks presence/length by default. The original is verified
+                // against its digest and decoded when the learner actually opens the question.
+                using var stream = ReadImageContent(connection, transaction, id);
+                if (readMetadata is not null)
                 {
-                    var actual = readMetadata(path);
-                    if (actual.Width != expected.Width || actual.Height != expected.Height || actual.Orientation != 1 ||
-                        !string.Equals(actual.MimeType, expected.MimeType, StringComparison.OrdinalIgnoreCase))
-                        issue = "Размеры или формат изображения не соответствуют каталогу: " + key;
-                    // The decoder opens its own stream. Verify that both reads observed the same bytes.
-                    stream.Position = 0;
-                    var after = Convert.ToHexStringLower(SHA256.HashData(stream));
-                    if (stream.Length != size || after != observed)
+                    observed = Convert.ToHexStringLower(SHA256.HashData(stream));
+                    if (!string.Equals(observed, hash, StringComparison.OrdinalIgnoreCase))
+                        issue = "Не совпадает контрольная сумма изображения: " + key;
+                    else
                     {
-                        observed = after;
-                        issue = "Изображение изменилось во время проверки: " + key;
+                        stream.Position = 0;
+                        var actual = readMetadata(stream);
+                        if (actual.Width != expected.Width || actual.Height != expected.Height || actual.Orientation != 1 ||
+                            !string.Equals(actual.MimeType, expected.MimeType, StringComparison.OrdinalIgnoreCase))
+                            issue = "Размеры или формат изображения не соответствуют каталогу: " + key;
                     }
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CatalogStorageException or
-            ArgumentException or FormatException or NotSupportedException or InvalidOperationException or CryptographicException)
+        catch (Exception ex) when (ex is IOException or CatalogStorageException or SqliteException or ArgumentException or
+            FormatException or NotSupportedException or InvalidOperationException or CryptographicException)
         {
             issue = "Не удалось прочитать изображение «" + key + "»: " + ex.Message;
         }
-        return new(path, hash, observed, expected.Width, expected.Height, issue);
+        return new(hash, observed, expected.Width, expected.Height, issue);
     }
 
     private static IReadOnlyList<TrainingDescription> ReadTrainingDescriptions(SqliteConnection connection,

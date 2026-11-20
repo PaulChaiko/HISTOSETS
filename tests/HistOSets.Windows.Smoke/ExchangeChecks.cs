@@ -13,12 +13,14 @@ internal static partial class Program
     {
         // Reuse the ready object drawn by the native brush/eraser test, so the
         // exchange exercises real compound geometry, holes and WIC calibration.
-        var sourceRoot = Path.Combine(temp, "advanced-editor-catalog");
+        var sourceRoot = Path.Combine(temp, "advanced-editor-catalog.histosets");
         var targetRoot = Path.Combine(temp, "exchange-target");
-        var packagePath = Path.Combine(temp, "selected-material.histosets-exchange");
-        var conflictPath = Path.Combine(temp, "changed-material.histosets-exchange");
-        var damagedPath = Path.Combine(temp, "damaged-material.histosets-exchange");
-        File.WriteAllText(damagedPath, "Not an exchange archive");
+        Directory.CreateDirectory(targetRoot);
+        var targetPath = Path.Combine(targetRoot, "exchange-target.histosets");
+        var packagePath = Path.Combine(temp, "selected-material.histosets");
+        var conflictPath = Path.Combine(temp, "changed-material.histosets");
+        var damagedPath = Path.Combine(temp, "damaged-material.histosets");
+        File.WriteAllText(damagedPath, "Not a HISTOSETS catalog");
         Guid materialId;
         Guid tagId;
         Guid analogId;
@@ -39,9 +41,9 @@ internal static partial class Program
             unselected.Texts["en"].Name = "Not selected for export";
             source.SaveMaterialDraft(unselected, ImageLoader.ReadMetadata);
         }
-        using (var target = new CatalogStore(targetRoot)) target.RenameCatalog("Получатель материалов");
+        CatalogStore.CreateCatalog(targetPath, "Получатель материалов");
 
-        var home = new HomeWindow(sourceDirectory: null, catalogDirectory: sourceRoot, rememberLocation: false);
+        var home = new HomeWindow(catalogPath: sourceRoot, rememberLocation: false);
         home.Show();
         try
         {
@@ -60,7 +62,7 @@ internal static partial class Program
                     "Selecting a material enables exchange export");
                 SaveScreenshot(exchange, Path.Combine(output, "native-exchange-export.png"));
                 CompleteExchangeTask(exchange, exchange.ExportSelectedToPathAsync(packagePath));
-                Check(File.Exists(packagePath), "The native export action writes the selected exchange package");
+                Check(File.Exists(packagePath), "The native export action writes a selected .histosets catalog");
             });
         }
         finally { home.Close(); }
@@ -68,8 +70,8 @@ internal static partial class Program
             Check(package.Materials.Count == 1 && package.Materials.Single().Id == materialId,
                 "Selective export includes only the chosen material UUID");
 
-        var beforePreview = ExchangeCatalogSnapshot(targetRoot);
-        home = new HomeWindow(sourceDirectory: null, catalogDirectory: targetRoot, rememberLocation: false);
+        var beforePreview = ExchangeCatalogSnapshot(targetPath);
+        home = new HomeWindow(catalogPath: targetPath, rememberLocation: false);
         home.Show();
         try
         {
@@ -79,19 +81,19 @@ internal static partial class Program
                 LoadExchangePackage(exchange, damagedPath);
                 Check(exchange.Preview is null && !((Button)exchange.FindName("ApplyButton")).IsEnabled
                     && !string.IsNullOrWhiteSpace(((TextBlock)exchange.FindName("OperationStatus")).Text)
-                    && ExchangeCatalogSnapshot(targetRoot) == beforePreview,
+                    && ExchangeCatalogSnapshot(targetPath) == beforePreview,
                     "An invalid exchange package shows a native error and cannot change the target catalog");
                 LoadExchangePackage(exchange, packagePath);
                 var preview = exchange.Preview ?? throw ExchangeFailure(exchange, "No import preview");
                 Check(preview.Items.Single(i => i.Kind == ExchangeEntityKind.Material).Status == ExchangeChangeKind.Add
                     && ((Button)exchange.FindName("ApplyButton")).IsEnabled,
                     "Import preview identifies a new material and enables applying the complete graph");
-                Check(ExchangeCatalogSnapshot(targetRoot) == beforePreview,
+                Check(ExchangeCatalogSnapshot(targetPath) == beforePreview,
                     "Opening an import preview does not change the target SQLite database or catalog files");
                 SelectExchangeItem(exchange, preview.Items.Single(i => i.Kind == ExchangeEntityKind.Material).Key);
                 SaveScreenshot(exchange, Path.Combine(output, "native-exchange-import.png"));
             });
-            Check(ExchangeCatalogSnapshot(targetRoot) == beforePreview
+            Check(ExchangeCatalogSnapshot(targetPath) == beforePreview
                 && ((TextBlock)home.FindName("CatalogStatistics")).Text == "Объектов: 0",
                 "Closing the exchange preview cancels import without changing the empty catalog");
 
@@ -106,20 +108,20 @@ internal static partial class Program
             Check(((TextBlock)home.FindName("CatalogStatistics")).Text == "Объектов: 1",
                 "Returning from import refreshes the home catalog count");
 
-            var beforeRepeat = ExchangeCatalogSnapshot(targetRoot);
+            var beforeRepeat = ExchangeCatalogSnapshot(targetPath);
             InModal<ExchangeWindow>(home, "ExchangeButton", exchange =>
             {
                 LoadExchangePackage(exchange, packagePath);
                 Check(exchange.Preview is not null && exchange.Preview.Items.All(i => i.Status == ExchangeChangeKind.Unchanged),
                     "Reimport of the same package identifies all material and dictionary entries as unchanged");
                 CompleteExchangeTask(exchange, exchange.ApplyImportAsync());
-                Check(exchange.Preview is null && ExchangeCatalogSnapshot(targetRoot) == beforeRepeat,
+                Check(exchange.Preview is null && ExchangeCatalogSnapshot(targetPath) == beforeRepeat,
                     "Applying an unchanged package creates no duplicate material, revision or extra backup");
             });
         }
         finally { home.Close(); }
 
-        using (var target = new CatalogStore(targetRoot))
+        using (var target = new CatalogStore(targetPath))
         {
             var imported = target.LoadMaterialDraft(materialId);
             Check(imported.Status == "ready" && imported.Texts["ru"].Name == expected.Texts["ru"].Name
@@ -135,10 +137,12 @@ internal static partial class Program
                 && target.LoadTaxonomy().Tags.Single(t => t.Id == tagId).Names["en"] == "Material exchange"
                 && target.LoadAnalogGroups().Single(g => g.Id == analogId).Names["ru"] == "Группа для обмена",
                 "Native import retains tags, translated dictionary values and the analogue group");
-            Check(File.Exists(imported.Images.Single().ManagedPath)
-                && HashExchangeFile(imported.Images.Single().ManagedPath!) == HashExchangeFile(expected.Images.Single().ManagedPath!)
-                && Directory.GetFiles(Path.Combine(targetRoot, "BACKUPS"), "before-exchange-*.histosets").Length == 1,
-                "Import installs the verified original image and makes one full backup before the first change");
+            using (var from = new CatalogStore(sourceRoot))
+            using (var original = from.OpenImage(expected.Images.Single().ImageId!.Value))
+            using (var received = target.OpenImage(imported.Images.Single().ImageId!.Value))
+                Check(SHA256.HashData(original).SequenceEqual(SHA256.HashData(received))
+                    && Directory.GetFiles(Path.Combine(targetRoot, "BACKUPS"), "before-exchange-*.histosets").Length == 1,
+                    "Import embeds the verified original and makes one full backup before the first change");
             imported.Texts["ru"].Name = "Локальная редакция";
             imported.Texts["en"].Name = "Local revision";
             target.SaveMaterialDraft(imported, ImageLoader.ReadMetadata);
@@ -152,12 +156,12 @@ internal static partial class Program
             source.ExportMaterials(conflictPath, [materialId]);
         }
 
-        home = new HomeWindow(sourceDirectory: null, catalogDirectory: targetRoot, rememberLocation: false);
+        home = new HomeWindow(catalogPath: targetPath, rememberLocation: false);
         home.Show();
         try
         {
             WaitHome(home);
-            var beforeConflict = ExchangeCatalogSnapshot(targetRoot);
+            var beforeConflict = ExchangeCatalogSnapshot(targetPath);
             InModal<ExchangeWindow>(home, "ExchangeButton", exchange =>
             {
                 WaitExchange(exchange);
@@ -170,7 +174,7 @@ internal static partial class Program
                     && !((Button)exchange.FindName("ApplyButton")).IsEnabled,
                     "Independent edits of the same material UUID require an explicit conflict decision");
                 Check(((Button)exchange.FindName("CloseButton")).Content is string closeText && closeText.Contains("Close", StringComparison.Ordinal)
-                    && item.LocalSummary != item.IncomingSummary && ExchangeCatalogSnapshot(targetRoot) == beforeConflict,
+                    && item.LocalSummary != item.IncomingSummary && ExchangeCatalogSnapshot(targetPath) == beforeConflict,
                     "English conflict preview displays both different versions without changing catalog data");
                 var conflictRow = SelectExchangeItem(exchange, item.Key);
                 SaveScreenshot(exchange, Path.Combine(output, "native-exchange-conflict-en.png"));
@@ -187,7 +191,7 @@ internal static partial class Program
             Click(home, "LanguageButton");
         }
         finally { home.Close(); }
-        using (var target = new CatalogStore(targetRoot))
+        using (var target = new CatalogStore(targetPath))
         {
             var merged = target.LoadMaterialDraft(materialId);
             Check(merged.Texts["ru"].Name == "Входящая редакция" && merged.Texts["en"].Name == "Incoming revision"
@@ -242,7 +246,11 @@ internal static partial class Program
         return Convert.ToHexString(SHA256.HashData(stream));
     }
 
-    private static string ExchangeCatalogSnapshot(string root) => HashExchangeFile(Path.Combine(root, "catalog.sqlite"))
-        + "\n" + string.Join("\n", Directory.GetFiles(root, "*", SearchOption.AllDirectories)
-            .Select(file => Path.GetRelativePath(root, file)).Order(StringComparer.Ordinal));
+
+    private static string ExchangeCatalogSnapshot(string path)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        return HashExchangeFile(path) + "\n" + string.Join("\n", Directory.GetFiles(directory, "*", SearchOption.AllDirectories)
+            .Select(file => Path.GetRelativePath(directory, file)).Order(StringComparer.Ordinal));
+    }
 }

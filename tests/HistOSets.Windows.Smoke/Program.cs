@@ -1,5 +1,5 @@
 using System.IO;
-using System.Text.Json;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -8,9 +8,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using HistOSets;
 using HistOSets.Core;
-using HistOSets.Services;
 using HistOSets.Storage;
-using Microsoft.Web.WebView2.Wpf;
 
 internal static partial class Program
 {
@@ -36,53 +34,47 @@ internal static partial class Program
             // Programmatic control changes below run outside Dispatcher.PushFrame.
             // Keep async UI continuations on the dispatcher just as real clicks do.
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
-            var catalogRoot = System.IO.Path.Combine(temp, "catalog");
-            var window = new MainWindow(AppContext.BaseDirectory, catalogRoot);
+            var catalogPath = System.IO.Path.Combine(temp, "catalog.histosets");
+            CatalogStore.CopyCatalog(System.IO.Path.Combine(AppContext.BaseDirectory, "Demo.histosets"), catalogPath);
+            var window = new MainWindow(new CatalogStore(catalogPath), ownsStore: true);
             // Supply the startup window before pumping the dispatcher, so App
             // uses only this isolated catalog. The published EXE is tested separately.
             app.MainWindow = window;
             window.Show();
             Pump();
             Check(app.Windows.Count == 1, "Smoke harness opens only its isolated catalog window");
+            RunWindowBoundsChecks();
             var specimens = (ListBox)window.FindName("ListOfSpecimens");
             var elements = (ListBox)window.FindName("ListOfElements");
             var image = (Image)window.FindName("Specimen");
             var canvas = (Canvas)window.FindName("Desk");
             var welcome = (Image)window.FindName("WelcomeLogo");
-            Check(specimens.Items.Count == 5, "Portable XML imports from application directory into SQLite. Status: " + ((TextBlock)window.FindName("StatusText")).Text);
-            Check(File.Exists(System.IO.Path.Combine(catalogRoot, "catalog.sqlite")), "SQLite database created in the chosen writable directory");
-            var legacy = AtlasLoader.Load(AppContext.BaseDirectory);
+            Check(specimens.Items.Count == 5, "The bundled catalog directly opens five objects from one file");
             Check(specimens.SelectedIndex == -1 && image.Source is null && welcome.Source is not null && welcome.IsVisible,
                 "Startup displays the original logo until a specimen is selected");
-            Check(!((Button)window.FindName("PreviewButton")).IsEnabled, "Preview requires a selected specimen");
             SaveScreenshot(window, System.IO.Path.Combine(output, "native-welcome.png"));
             var regions = 0;
             var language = (ComboBox)window.FindName("LanguageSelector");
             foreach (var languageIndex in new[] { 0, 1 })
             {
-            language.SelectedIndex = languageIndex;
-            foreach (AtlasSpecimen specimen in specimens.Items.Cast<AtlasSpecimen>().ToArray())
-            {
-                specimens.SelectedItem = specimen;
-                WaitImage(window);
-                Check(image.Source is not null, "Image: " + specimen.Name);
-                Check(canvas.Children.OfType<Polygon>().Count() == 0, "No stale contours after image switch");
-                foreach (AtlasElement element in elements.Items)
+                language.SelectedIndex = languageIndex;
+                foreach (AtlasSpecimen specimen in specimens.Items.Cast<AtlasSpecimen>().ToArray())
                 {
-                    elements.SelectedItem = element;
-                    var polygons = canvas.Children.OfType<Polygon>().ToArray();
-                    Check(polygons.Length == element.Polygons.Count, "Contours: " + element.Name);
-                    regions += polygons.Length;
-                    if (canvas.Width == 2592 && polygons.Length > 0)
+                    specimens.SelectedItem = specimen;
+                    WaitImage(window);
+                    Check(image.Source is not null, "Image: " + specimen.Name);
+                    Check(canvas.Children.OfType<Polygon>().Count() == 0, "No stale contours after image switch");
+                    foreach (AtlasElement element in elements.Items)
                     {
-                        var stored = element.Polygons[0].Points[0];
-                        var original = legacy.Specimens.Single(s => s.Name == specimen.Name).Elements.Single(e => e.Name == element.Name).Polygons[0].Points[0];
-                        var actual = polygons[0].Points[0];
-                        Check(specimen.CoordinateSpace == CoordinateSpace.Pixels && Math.Abs(actual.X - original.X * 25) < .001 && Math.Abs(actual.Y - original.Y * 25) < .001 && actual.X == stored.X && actual.Y == stored.Y,
-                            "WIC 2400 DPI is applied once at import; native view uses persisted pixels");
+                        elements.SelectedItem = element;
+                        var polygons = canvas.Children.OfType<Polygon>().ToArray();
+                        Check(polygons.Length == element.Polygons.Count, "Contours: " + element.Name);
+                        for (var i = 0; i < polygons.Length; i++)
+                            Check(polygons[i].Points.SequenceEqual(element.Polygons[i].Points.Select(p => new Point(p.X, p.Y))),
+                                "The viewer renders the exact original pixel coordinates of the saved region");
+                        regions += polygons.Length;
                     }
                 }
-            }
             }
             Check(regions == 66, "All 66 baseline polygons rendered");
             specimens.SelectedIndex = -1;
@@ -96,7 +88,7 @@ internal static partial class Program
             SaveScreenshot(window, System.IO.Path.Combine(output, "native-view.png"));
             var materialId = ((AtlasSpecimen)specimens.SelectedItem).MaterialId;
             var elementId = ((AtlasElement)elements.SelectedItem).Id;
-            Check(specimens.Items.Cast<AtlasSpecimen>().All(s => s.IsPrimaryImage), "Each object card opens its designated primary image");
+            Check(window.FindName("ImageSelector") is null, "The viewer has one image per card with no image selector");
             language.SelectedIndex = 0;
             WaitImage(window);
             Check(((AtlasSpecimen)specimens.SelectedItem).MaterialId == materialId && ((AtlasElement)elements.SelectedItem).Id == elementId, "Language switch preserves selected material and element");
@@ -105,7 +97,8 @@ internal static partial class Program
             WaitImage(window);
             Check(specimens.Items.Count == 2 && specimens.Items.Cast<AtlasSpecimen>().All(s => s.Locale == "ru"), "English search finds Russian material cards");
             search.Text = "Несуществующий препарат";
-            Check(specimens.Items.Count == 0 && image.Source is null && canvas.Children.OfType<Polygon>().Count() == 0 && !((Button)window.FindName("PreviewButton")).IsEnabled, "Empty search clears the prior image, elements and contours");
+            Check(specimens.Items.Count == 0 && image.Source is null && canvas.Children.OfType<Polygon>().Count() == 0
+                && !((CheckBox)window.FindName("OverviewToggle")).IsEnabled, "Empty search clears the prior image, elements and contours");
             search.Clear();
             foreach (var index in new[] { 0, 1, 2, 3, 4, 0 }) specimens.SelectedIndex = index;
             WaitImage(window);
@@ -116,7 +109,14 @@ internal static partial class Program
             var imageScale = (ScaleTransform)window.FindName("ImageScale");
             Check(Math.Abs(imageScale.ScaleX - 1) < .001 && Math.Abs(imageScale.ScaleY - 1) < .001, "100 percent displays one image pixel per logical display unit");
             Click(window, "ZoomInButton");
-            Check(imageScale.ScaleX > 1 && ((Border)window.FindName("OverviewBorder")).IsVisible, "Zoom exposes a navigation overview for the enlarged image");
+            var overview = (Border)window.FindName("OverviewBorder");
+            var overviewToggle = (CheckBox)window.FindName("OverviewToggle");
+            Check(imageScale.ScaleX > 1 && overview.IsVisible, "Zoom exposes a navigation overview for the enlarged image");
+            overviewToggle.IsChecked = false;
+            Click(window, "ZoomInButton");
+            Check(!overview.IsVisible && imageScale.ScaleX > 1, "Overview remains hidden while zooming after it has been turned off");
+            overviewToggle.IsChecked = true;
+            Check(overview.IsVisible, "The overview can be shown again without changing images");
             var outline = (CheckBox)window.FindName("OutlineToggle");
             outline.IsChecked = false;
             Check(!canvas.Children.OfType<Polygon>().Any(p => p.IsVisible), "Outline switch hides selected contours");
@@ -131,46 +131,27 @@ internal static partial class Program
             Check(imageScale.ScaleX > 0 && imageScale.ScaleX < 1, "Fit returns the baseline image to the available viewport");
 
             var selected = (AtlasSpecimen)specimens.SelectedItem;
-            var loaded = ImageLoader.Load(selected.ImagePath);
-            using (File.Open(selected.ImagePath, FileMode.Open, FileAccess.Read, FileShare.None))
-                Check(true, "Image stream released after loading");
-            var preview = new ViewerPreviewWindow(selected, loaded, catalogRoot) { Owner = window };
-            preview.Show();
-            var browser = (WebView2)preview.FindName("Browser");
-            var deadline = DateTime.UtcNow.AddSeconds(45);
-            var viewerReady = false;
-            while (DateTime.UtcNow < deadline && !viewerReady)
-            {
-                Pump();
-                if (browser.CoreWebView2 is not null)
-                {
-                    var query = browser.ExecuteScriptAsync("window.histosetsPreview ? JSON.stringify(window.histosetsPreview.snapshot()) : null");
-                    while (!query.IsCompleted && DateTime.UtcNow < deadline) Pump();
-                    if (query.IsCompletedSuccessfully && query.Result != "null")
-                    {
-                        var json = JsonSerializer.Deserialize<string>(query.Result);
-                        if (json is not null)
-                        {
-                            using var state = JsonDocument.Parse(json);
-                            viewerReady = state.RootElement.GetProperty("loaded").GetBoolean();
-                            if (viewerReady)
-                                Check(state.RootElement.GetProperty("annotations").GetArrayLength() == selected.Elements.Sum(e => e.Polygons.Count),
-                                    "WebView2 local assets and annotation bridge");
-                        }
-                    }
-                }
-            }
-            Check(viewerReady, "WebView2 image loads offline from virtual host");
-            preview.Close();
+            var selectedImageId = selected.ImageId ?? throw new Exception("Missing demo image identity");
             window.Close();
+            // The editor test imports an ordinary image chosen by a user. Obtain its
+            // unchanged contents from the bundled catalog, without a resource folder.
+            var importImage = System.IO.Path.Combine(temp, "editor-import.jpg");
+            byte[] selectedImageHash;
+            using (var data = new CatalogStore(catalogPath))
+            {
+                using var source = data.OpenImage(selectedImageId);
+                using (var destination = File.Create(importImage)) source.CopyTo(destination);
+                using var original = File.OpenRead(importImage);
+                selectedImageHash = SHA256.HashData(original);
+            }
 
-            var home = new HomeWindow(sourceDirectory: null, catalogDirectory: "", rememberLocation: false);
+            var home = new HomeWindow(catalogPath: null, rememberLocation: false);
             home.Show();
             Pump();
-            Check(home.SelectedCatalogDirectory is null && !((Button)home.FindName("ViewButton")).IsEnabled,
+            Check(home.SelectedCatalogPath is null && !((Button)home.FindName("ViewButton")).IsEnabled,
                 "Home starts with no selected database and cannot open the viewer");
             Check(!((Button)home.FindName("SelfTestButton")).IsEnabled && !((Button)home.FindName("EditButton")).IsEnabled,
-                "Home requires a selected database for editing and keeps unfinished self-test disabled");
+                "Home requires a selected database for editing and self-test");
             Click(home, "LanguageButton");
             Check(Equals(((Button)home.FindName("ViewButton")).Content, "View")
                 && ((TextBlock)home.FindName("CatalogName")).Text == "No database selected"
@@ -179,11 +160,11 @@ internal static partial class Program
             SaveScreenshot(home, System.IO.Path.Combine(output, "native-home-empty.png"));
             home.Close();
 
-            home = new HomeWindow(sourceDirectory: null, catalogDirectory: catalogRoot, rememberLocation: false);
+            home = new HomeWindow(catalogPath: catalogPath, rememberLocation: false);
             home.Show();
             WaitHome(home);
             Check(Equals(((Button)home.FindName("ViewButton")).Content, "View")
-                && home.SelectedCatalogDirectory == catalogRoot
+                && home.SelectedCatalogPath == catalogPath
                 && ((TextBlock)home.FindName("CatalogStatistics")).Text == "Objects: 5"
                 && !string.IsNullOrWhiteSpace(((TextBlock)home.FindName("CatalogModified")).Text),
                 "Home reopens the chosen catalog with its object count, modification date and selected UI language");
@@ -207,9 +188,9 @@ internal static partial class Program
             SaveScreenshot(home, System.IO.Path.Combine(output, "native-home-catalog.png"));
             home.Close();
 
-            var emptyRoot = System.IO.Path.Combine(temp, "empty-catalog");
-            using (var empty = new CatalogStore(emptyRoot)) empty.RenameCatalog("Пустая учебная база");
-            home = new HomeWindow(sourceDirectory: null, catalogDirectory: emptyRoot, rememberLocation: false);
+            var emptyPath = System.IO.Path.Combine(temp, "empty-catalog.histosets");
+            CatalogStore.CreateCatalog(emptyPath, "Пустая учебная база");
+            home = new HomeWindow(catalogPath: emptyPath, rememberLocation: false);
             home.Show();
             WaitHome(home);
             Check(((TextBlock)home.FindName("CatalogName")).Text == "Пустая учебная база"
@@ -217,9 +198,9 @@ internal static partial class Program
                 "A newly created empty catalog opens without importing demonstration objects");
             Check(((Button)home.FindName("EditButton")).IsEnabled && ((Button)home.FindName("SelfTestButton")).IsEnabled,
                 "Selected empty database enables the editor and the training preparation screen");
-            var edited = CheckEditorWorkflow(home, selected.ImagePath, output);
+            var edited = CheckEditorWorkflow(home, importImage, output);
             home.Close();
-            CheckSavedEditorObject(emptyRoot, output, edited);
+            CheckSavedEditorObject(emptyPath, output, edited);
             CheckAdvancedEditorWorkflow(temp, output);
             CheckExchangeWorkflow(temp, output);
             CheckTrainingWorkflow(temp, output);
@@ -230,11 +211,11 @@ internal static partial class Program
             Guid topicId;
             Guid assignedTagId;
             Guid analogGroupId;
-            using (var data = new CatalogStore(catalogRoot))
+            using (var data = new CatalogStore(catalogPath))
             {
                 var statistics = data.GetStatistics();
-                Check(statistics == new CatalogStatistics(5, 5, 10, 27, 33), "WIC import shares verified translations and geometry");
-                var management = new CatalogWindow(data, catalogRoot, AppContext.BaseDirectory);
+                Check(statistics == new CatalogStatistics(5, 5, 10, 27, 33), "The demo retains verified translations and geometry");
+                var management = new CatalogWindow(data);
                 management.Show();
                 Pump();
                 Check(((Button)management.FindName("BackupButton")).IsEnabled, "Data management offers a full backup");
@@ -247,8 +228,8 @@ internal static partial class Program
                 var groupList = (ListBox)tagWindow.FindName("GroupList");
                 groupList.SelectedValuePath = "Id";
                 groupList.SelectedValue = topicId;
-                Check(!((Button)tagWindow.FindName("EditGroupButton")).IsEnabled && !((Button)tagWindow.FindName("DeleteGroupButton")).IsEnabled,
-                    "Predefined tag types cannot be renamed or deleted in the native dictionary");
+                Check(groupList.Items.Count == 7 && tagWindow.FindName("EditGroupButton") is null && tagWindow.FindName("DeleteGroupButton") is null,
+                    "The tag dictionary offers six fixed types and an All types filter");
                 EditDictionaryDialog(tagWindow, "NewTagButton", "Эпителий", "Epithelium");
                 var tagList = (ListBox)tagWindow.FindName("TagList");
                 ((TextBox)tagWindow.FindName("TagSearch")).Text = "EPITHELIUM";
@@ -274,38 +255,21 @@ internal static partial class Program
                     "Native analogue dialog saves one group assignment shared by the object's translations");
                 data.CreateBackup(backupPath);
             }
-            var filtered = new MainWindow(AppContext.BaseDirectory, catalogRoot);
+            var filtered = new MainWindow(new CatalogStore(catalogPath), ownsStore: true);
             filtered.Show();
             Pump();
-            ((Expander)filtered.FindName("TagFilterExpander")).IsExpanded = true;
-            filtered.UpdateLayout();
-            var typeSelector = (ComboBox)filtered.FindName("TagTypeSelector");
-            typeSelector.SelectedValuePath = "Id";
-            typeSelector.SelectedValue = topicId;
-            var valueSelector = (ComboBox)filtered.FindName("TagValueSelector");
-            valueSelector.SelectedValuePath = "Id";
-            valueSelector.SelectedValue = assignedTagId;
             var filteredList = (ListBox)filtered.FindName("ListOfSpecimens");
+            Check(filtered.FindName("SortSelector") is null && filtered.FindName("DictionaryButton") is null
+                && filtered.FindName("AnalogGroupsButton") is null && filtered.FindName("TagFilterExpander") is null,
+                "Viewer keeps catalog editing, ordering, and filters out of the specimen panel");
+            ChooseViewerTagFilter(filtered, topicId, assignedTagId, apply: false);
+            Check(filteredList.Items.Count == 5, "Cancelling the filter dialog leaves the viewer selection unchanged");
+            ChooseViewerTagFilter(filtered, topicId, assignedTagId, apply: true);
             Check(filteredList.Items.Count == 1 && ((AtlasSpecimen)filteredList.Items[0]).MaterialId == selected.MaterialId, "Saved tag filters the native catalog after restart");
             Check(((AtlasSpecimen)filteredList.Items[0]).AnalogGroupId == analogGroupId
                 && ((AtlasSpecimen)filteredList.Items[0]).DisplayName.StartsWith("Учебные аналоги — ", StringComparison.Ordinal),
                 "Viewer displays the saved analogue group before the object's own name");
             filteredList.SelectedIndex = 0;
-            WaitImage(filtered);
-            var assignmentDialogReady = false;
-            filtered.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
-            {
-                var assignmentDialog = Application.Current.Windows.OfType<TagsWindow>().SingleOrDefault();
-                if (assignmentDialog is not null)
-                {
-                    assignmentDialogReady = ((Button)assignmentDialog.FindName("SaveAssignments")).Visibility == Visibility.Visible
-                        && ((ListBox)assignmentDialog.FindName("TagList")).Items.Cast<TagsWindow.TagChoice>()
-                            .Any(tag => tag.Id == assignedTagId && tag.Assigned);
-                    assignmentDialog.Close();
-                }
-            }));
-            Click(filtered, "DictionaryButton");
-            Check(assignmentDialogReady, "Tags button opens assignment editing for the selected object with its saved tags");
             WaitImage(filtered);
             Click(filtered, "MaterialTagsButton");
             var metadataWindow = Application.Current.Windows.OfType<INFO2>().Single();
@@ -327,41 +291,40 @@ internal static partial class Program
             Click(filtered, "ResetFiltersButton");
             Check(filteredList.Items.Count == 5, "Reset clears selected tag filters and restores all object cards");
             filtered.Close();
-            File.Delete(selected.ImagePath);
-            var damagedMedia = new MainWindow(AppContext.BaseDirectory, catalogRoot);
-            ((ListBox)damagedMedia.FindName("ListOfSpecimens")).SelectedIndex = 0;
-            Check(((TextBlock)damagedMedia.FindName("ImageMessage")).Text == "Изображение недоступно", "Missing managed image leaves window usable");
-            Check(!((Button)damagedMedia.FindName("PreviewButton")).IsEnabled, "Missing managed image cannot open preview");
-            damagedMedia.Close();
-            var restoredRoot = System.IO.Path.Combine(temp, "restored");
-            CatalogStore.RestoreBackup(backupPath, restoredRoot);
-            var withoutSource = new MainWindow(temp, restoredRoot);
-            Check(((ListBox)withoutSource.FindName("ListOfSpecimens")).Items.Count == 5, "Restored database opens with no XML at the application source path");
-            ((ListBox)withoutSource.FindName("ListOfSpecimens")).SelectedIndex = 0;
-            WaitImage(withoutSource);
-            Check(((Image)withoutSource.FindName("Specimen")).Source is not null, "Restored managed image renders");
-            withoutSource.Close();
 
-            var backgroundImport = System.IO.Path.Combine(temp, "background-import");
-            Task.Run(() => CatalogStore.CreateFromLegacy(System.IO.Path.Combine(AppContext.BaseDirectory, "ATLAS", "ATLAS.xml"),
-                AppContext.BaseDirectory, backgroundImport, ImageLoader.ReadMetadata)).GetAwaiter().GetResult();
-            using (var created = new CatalogStore(backgroundImport))
-                Check(created.GetStatistics() == new CatalogStatistics(5, 5, 10, 27, 33), "Data-window background WIC import creates a complete separate catalog");
+            var isolatedFolder = Directory.CreateDirectory(System.IO.Path.Combine(temp, "isolated"));
+            var transferredPath = System.IO.Path.Combine(isolatedFolder.FullName, "received.histosets");
+            File.Move(backupPath, transferredPath);
+            Check(isolatedFolder.EnumerateFileSystemInfos().Single().FullName == transferredPath,
+                "Only the catalog file is transferred to the receiving folder");
+            using (var received = new CatalogStore(transferredPath))
+            {
+                using (var original = received.OpenImage(selectedImageId))
+                    Check(selectedImageHash.SequenceEqual(SHA256.HashData(original)), "The standalone copy preserves the original image bytes");
+                var viewer = new MainWindow(received);
+                viewer.Show();
+                Pump();
+                var receivedObjects = (ListBox)viewer.FindName("ListOfSpecimens");
+                Check(receivedObjects.Items.Count == 5, "The transferred catalog opens directly with no additional files");
+                receivedObjects.SelectedItem = receivedObjects.Items.Cast<AtlasSpecimen>().Single(item => item.MaterialId == selected.MaterialId);
+                WaitImage(viewer);
+                viewer.Close();
+            }
 
-            Directory.CreateDirectory(System.IO.Path.Combine(temp, "ATLAS"));
-            Directory.CreateDirectory(System.IO.Path.Combine(temp, "SPECIMENS"));
-            var xml = System.IO.Path.Combine(temp, "ATLAS", "ATLAS.xml");
-            File.WriteAllText(xml, "<ATLAS><Specimen NAME='Missing' IMAGE='missing.jpg'/></ATLAS>");
-            var brokenCatalog = System.IO.Path.Combine(temp, "failed-import");
-            var broken = new MainWindow(temp, brokenCatalog);
-            ((ListBox)broken.FindName("ListOfSpecimens")).SelectedIndex = 0;
-            Check(((TextBlock)broken.FindName("CatalogCount")).Text == "Каталог недоступен", "Missing source image aborts migration with recovery UI");
-            Check(!((Button)broken.FindName("PreviewButton")).IsEnabled, "Failed migration cannot open preview");
-            broken.Close();
-            File.WriteAllText(xml, "<ATLAS><Specimen");
-            broken = new MainWindow(temp, brokenCatalog);
-            Check(((TextBlock)broken.FindName("CatalogCount")).Text == "Каталог недоступен", "Malformed catalog is recoverable");
-            broken.Close();
+            var brokenPath = System.IO.Path.Combine(temp, "invalid.histosets");
+            File.WriteAllText(brokenPath, "Not a HISTOSETS catalog");
+            home = new HomeWindow(catalogPath: transferredPath, rememberLocation: false);
+            home.Show();
+            WaitHome(home);
+            var attempt = home.OpenCatalogAsync(brokenPath);
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (!attempt.IsCompleted && DateTime.UtcNow < deadline) Pump();
+            if (!attempt.IsCompleted) throw new Exception("Opening an invalid catalog did not finish");
+            attempt.GetAwaiter().GetResult();
+            Check(home.SelectedCatalogPath == transferredPath && ((Button)home.FindName("ViewButton")).IsEnabled
+                && File.ReadAllText(brokenPath) == "Not a HISTOSETS catalog",
+                "An invalid catalog is left intact and the previous selection remains usable");
+            home.Close();
             app.Shutdown();
             Console.WriteLine($"{checks} Windows checks passed.");
             return 0;
@@ -404,6 +367,38 @@ internal static partial class Program
     }
     private static void Click(Window window, string name)
         => ((Button)window.FindName(name)).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+    private static void ChooseViewerTagFilter(Window owner, Guid typeId, Guid tagId, bool apply)
+    {
+        Exception? problem = null;
+        owner.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            var dialog = Application.Current.Windows.OfType<TagFiltersWindow>().SingleOrDefault();
+            try
+            {
+                if (dialog is null) throw new Exception("The viewer did not open the tag filter dialog");
+                var type = (ComboBox)dialog.FindName("TypeSelector");
+                type.SelectedValuePath = "Id";
+                type.SelectedValue = typeId;
+                ((TextBox)dialog.FindName("TagSearchBox")).Text = "EPITHELIUM";
+                dialog.UpdateLayout();
+                var tags = (ListBox)dialog.FindName("TagList");
+                var target = tags.Items.Cast<TagFiltersWindow.TagChoice>().Single();
+                Check(target.Id == tagId, "The filter dialog searches translated tag names within the selected type");
+                var box = VisualChildren<CheckBox>(tags).Single();
+                box.SetCurrentValue(CheckBox.IsCheckedProperty, true);
+                Check(target.Selected, "Checking a visible tag changes the dialog's draft selection");
+                if (apply) Click(dialog, "ApplyButton");
+                else dialog.Close();
+            }
+            catch (Exception ex)
+            {
+                problem = ex;
+                dialog?.Close();
+            }
+        }));
+        Click(owner, "TagFiltersButton");
+        if (problem is not null) throw problem;
+    }
     private static void EditDictionaryDialog(Window owner, string buttonName, string russian, string english)
     {
         Exception? failure = null;
@@ -433,16 +428,19 @@ internal static partial class Program
     }
     private static void WaitImage(MainWindow window)
     {
+        var specimen = (Image)window.FindName("Specimen");
+        var message = (TextBlock)window.FindName("ImageMessage");
         var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (!((Button)window.FindName("PreviewButton")).IsEnabled && ((TextBlock)window.FindName("ImageMessage")).Text != "Изображение недоступно" && DateTime.UtcNow < deadline) Pump();
-        if (!((Button)window.FindName("PreviewButton")).IsEnabled) throw new Exception("Image did not load: " + ((TextBlock)window.FindName("StatusText")).Text);
+        while (specimen.Source is null && message.Text is not ("Изображение недоступно" or "Image unavailable")
+            && DateTime.UtcNow < deadline) Pump();
+        if (specimen.Source is null) throw new Exception("Image did not load: " + ((TextBlock)window.FindName("StatusText")).Text);
     }
     private static void WaitHome(HomeWindow window)
     {
         var deadline = DateTime.UtcNow.AddSeconds(20);
         while ((!((Button)window.FindName("ViewButton")).IsEnabled || !((Button)window.FindName("LanguageButton")).IsEnabled)
             && DateTime.UtcNow < deadline) Pump();
-        if (window.SelectedCatalogDirectory is null || !((Button)window.FindName("ViewButton")).IsEnabled)
+        if (window.SelectedCatalogPath is null || !((Button)window.FindName("ViewButton")).IsEnabled)
             throw new Exception("Home could not open the catalog: " + ((TextBlock)window.FindName("StatusText")).Text);
     }
     private static void Check(bool condition, string name)

@@ -6,7 +6,7 @@ using HistOSets.Storage;
 
 namespace HistOSets;
 
-public partial class AnalogGroupsWindow : Window
+public partial class AnalogGroupsWindow : HistOSets.Controls.WorkAreaWindow
 {
     private readonly CatalogStore store;
     private readonly Guid? material;
@@ -25,8 +25,8 @@ public partial class AnalogGroupsWindow : Window
         Title = T("Группы аналогов — HISTOSETS", "Analogue groups — HISTOSETS");
         Heading.Text = material is null ? T("Группы аналогов", "Analogue groups") : T("Аналоги объекта: ", "Object analogues: ") + name;
         Instructions.Text = material is null
-            ? T("Создавайте группы аналогов с названиями на RU и EN. Для назначения группы выберите объект в главном окне. Изменения справочника сохраняются сразу. Группу с объектами удалить нельзя.",
-                "Create analogue groups with names in RU and EN. To assign a group, select an object in the main window. Dictionary changes are saved immediately. A group containing objects cannot be deleted.")
+            ? T("Создавайте группы аналогов с названиями на RU и EN. Назначить группу можно на вкладке «Метаданные» в редакторе объекта. Изменения справочника сохраняются сразу. Группу с объектами удалить нельзя.",
+                "Create analogue groups with names in RU and EN. Assign a group in the Metadata tab of the object editor. Dictionary changes are saved immediately. A group containing objects cannot be deleted.")
             : T("Выберите группу для этого объекта или «Без группы аналогов» и нажмите «Сохранить назначение». Объект может состоять в одной группе. Названия групп используются как общие ответы в самопроверке. Создание, переименование и удаление групп сохраняются сразу.",
                 "Choose a group for this object or “No analogue group”, then save the assignment. An object can belong to one group. Group names are used as shared answers in self-testing. Creating, renaming and deleting groups is saved immediately.");
         NewGroupButton.Content = T("Создать группу…", "Create group…");

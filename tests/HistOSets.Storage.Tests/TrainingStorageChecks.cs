@@ -1,7 +1,5 @@
-using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using HistOSets.Core;
 using HistOSets.Storage;
 using Microsoft.Data.Sqlite;
@@ -18,12 +16,14 @@ internal static class TrainingStorageChecks
             throw new Exception("Expected CatalogStorageException: " + name);
         }
         var folder = Path.Combine(temp, "Training"); Directory.CreateDirectory(folder);
-        var image = AtlasLoader.Load(source).Specimens.Select(s => s.ImagePath).Distinct().MinBy(p => new FileInfo(p).Length)!;
-        var root = Path.Combine(folder, "Source");
+        var image = Directory.GetFiles(Path.Combine(source, "SPECIMENS")).MinBy(p => new FileInfo(p).Length)!;
+        var root = Path.Combine(folder, "Source.histosets");
+        CatalogStore.CreateCatalog(root, "Training");
         using var sender = new CatalogStore(root);
-        Check(sender.GetMetadata().FormatVersion == 6 && Convert.ToInt64(Sql(sender.DatabasePath,
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")) == 21,
-            "New schema6 has exactly 21 application tables including two independent training-description tables");
+        Check(sender.GetMetadata().FormatVersion == 7 && Convert.ToInt64(Sql(sender.DatabasePath,
+            "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('training_prompts','training_prompt_translations');")) == 2,
+            "Native schema 7 retains both independent training description tables");
+        ImageMetadata Decode(Stream stream) => metadata(image);
         var draft = Card(image, "Образец", "Specimen");
         draft.Status = "ready";
         draft = sender.SaveMaterialDraft(draft, metadata);
@@ -79,38 +79,39 @@ internal static class TrainingStorageChecks
         Check(Hash(sender.DatabasePath) == hash && sender.LoadMaterialDraft(draft.Id).Texts["ru"].Summary != fail.Texts["ru"].Summary,
             "Training failure rolls back earlier atlas text updates, revisions and training changes together");
         Sql(sender.DatabasePath, "DROP TRIGGER fail_training;");
-        var snapshot = sender.CaptureTrainingCatalog(metadata); hash = Hash(sender.DatabasePath);
+        var snapshot = sender.CaptureTrainingCatalog(Decode); hash = Hash(sender.DatabasePath);
         var captured = snapshot.Materials.Single(m => m.Id == draft.Id);
         Check(captured.Descriptions.Select(p => p.Id).SequenceEqual(draft.TrainingPrompts.Select(p => p.Id))
             && captured.Elements[0].Descriptions.Single().Id == elementPrompt && captured.Images.Single().IsUsable,
             "Training snapshot contains independent material and element variants plus a verified usable source image");
-        Check(Hash(sender.DatabasePath) == hash && sender.CaptureTrainingCatalog(metadata).SourceFingerprint == snapshot.SourceFingerprint,
+        Check(Hash(sender.DatabasePath) == hash && sender.CaptureTrainingCatalog(Decode).SourceFingerprint == snapshot.SourceFingerprint,
             "Repeated training snapshots are read-only and retain a stable content fingerprint");
-        var dimensionMismatch = sender.CaptureTrainingCatalog(path => metadata(path) with { Width = metadata(path).Width + 1 });
+        var dimensionMismatch = sender.CaptureTrainingCatalog(_ => metadata(image) with { Width = metadata(image).Width + 1 });
         Check(!dimensionMismatch.Materials.Single().Images.Single().IsUsable && Hash(sender.DatabasePath) == hash,
             "Training preparation rejects decoded image dimensions that disagree with stored scientific geometry");
         var fingerprintBeforeSql = snapshot.SourceFingerprint;
         Sql(sender.DatabasePath, "UPDATE training_prompt_translations SET text=text || ' SQL' WHERE prompt_id=$id AND locale='ru';", ("$id", materialPrompt.ToString()));
-        Check(sender.CaptureTrainingCatalog(metadata).SourceFingerprint != fingerprintBeforeSql,
+        Check(sender.CaptureTrainingCatalog(Decode).SourceFingerprint != fingerprintBeforeSql,
             "An external SQL edit invalidates training data even when revision counters were not advanced");
         draft = sender.LoadMaterialDraft(draft.Id);
         draft.TrainingPrompts[0].Texts["ru"] += " Новый вариант.";
         draft = sender.SaveMaterialDraft(draft, metadata);
-        Check(sender.CaptureTrainingCatalog(metadata).SourceFingerprint != snapshot.SourceFingerprint
+        Check(sender.CaptureTrainingCatalog(Decode).SourceFingerprint != snapshot.SourceFingerprint
             && captured.Descriptions[0].Texts["ru"] != draft.TrainingPrompts[0].Texts["ru"],
             "Prompt changes invalidate the training fingerprint while earlier captured descriptions remain immutable");
-        var asset = draft.Images[0].ManagedPath!; var bytes = File.ReadAllBytes(asset);
-        var cleanSnapshot = sender.CaptureTrainingCatalog(metadata); hash = Hash(sender.DatabasePath);
-        File.WriteAllBytes(asset, bytes[..^1]);
-        var damaged = sender.CaptureTrainingCatalog(metadata);
+        var asset = draft.Images[0].ImageId!.Value;
+        var bytes = File.ReadAllBytes(image);
+        var cleanSnapshot = sender.CaptureTrainingCatalog(Decode);
+        Sql(sender.DatabasePath, "UPDATE image_contents SET data=zeroblob(length(data)) WHERE image_id=$id;", ("$id", asset.ToString()));
+        hash = Hash(sender.DatabasePath);
+        var damaged = sender.CaptureTrainingCatalog(Decode);
         Check(!damaged.Materials.Single().Images.Single().IsUsable && !string.IsNullOrWhiteSpace(damaged.Materials.Single().Images.Single().Issue)
             && damaged.SourceFingerprint != cleanSnapshot.SourceFingerprint && Hash(sender.DatabasePath) == hash,
-            "A changed image becomes explicitly unavailable for training and invalidates the snapshot without writing the catalog");
-        File.WriteAllBytes(asset, bytes);
-        File.Delete(asset);
-        Check(!sender.CaptureTrainingCatalog(metadata).Materials.Single().Images.Single().IsUsable,
-            "A missing original produces a training image issue instead of silently preparing a broken question");
-        File.WriteAllBytes(asset, bytes);
+            "Verified training preparation detects a same-size damaged embedded original without writing the catalog");
+        Sql(sender.DatabasePath, "DELETE FROM image_contents WHERE image_id=$id;", ("$id", asset.ToString()));
+        Check(!sender.CaptureTrainingCatalog().Materials.Single().Images.Single().IsUsable,
+            "A missing embedded original produces a training image issue instead of preparing a broken question");
+        Sql(sender.DatabasePath, "INSERT INTO image_contents(image_id,data) VALUES($id,$data);", ("$data", bytes), ("$id", asset.ToString()));
         var retained = draft.TrainingPrompts.Single(p => p.Id == disabledPrompt).Clone();
         draft.TrainingPrompts.RemoveAll(p => p.Id == disabledPrompt); draft = sender.SaveMaterialDraft(draft, metadata);
         Check(Convert.ToInt64(Sql(sender.DatabasePath, "SELECT COUNT(*) FROM training_prompts WHERE id=$id AND deleted_utc IS NOT NULL;", ("$id", disabledPrompt.ToString()))) == 1
@@ -119,11 +120,11 @@ internal static class TrainingStorageChecks
         draft.TrainingPrompts.Add(retained); draft = sender.SaveMaterialDraft(draft, metadata);
         Check(draft.TrainingPrompts.Any(p => p.Id == disabledPrompt), "A removed training variant can be restored with the same UUID under its original owner");
         var backup = Path.Combine(folder, "training.histosets"); sender.CreateBackup(backup);
-        var restoredRoot = Path.Combine(folder, "Restored"); CatalogStore.RestoreBackup(backup, restoredRoot);
+        var restoredRoot = Path.Combine(folder, "Restored.histosets"); CatalogStore.CopyCatalog(backup, restoredRoot);
         using (var restored = new CatalogStore(restoredRoot))
             Check(PromptContent(restored.LoadMaterialDraft(draft.Id)) == PromptContent(draft),
                 "Full backup and restore preserve every training UUID, language text, order, enabled state and owner");
-        count += ExchangeChecks(sender, draft, metadata, folder);
+        count += ExchangeChecks(sender, draft, image, metadata, folder);
         draft = sender.LoadMaterialDraft(draft.Id);
         draft.Elements.RemoveAll(e => e.Id == originalElement); draft = sender.SaveMaterialDraft(draft, metadata);
         Check(Convert.ToInt64(Sql(sender.DatabasePath, "SELECT COUNT(*) FROM training_prompts WHERE id=$id AND deleted_utc IS NOT NULL;", ("$id", elementPrompt.ToString()))) == 1
@@ -132,152 +133,77 @@ internal static class TrainingStorageChecks
         sender.DeleteMaterial(draft.Id, draft.Revision);
         Check(Convert.ToInt64(Sql(sender.DatabasePath, "SELECT COUNT(*) FROM training_prompts WHERE deleted_utc IS NULL;")) == 0
             && Convert.ToInt64(Sql(sender.DatabasePath, "SELECT COUNT(*) FROM training_prompt_translations WHERE deleted_utc IS NULL;")) == 0
-            && sender.CaptureTrainingCatalog(metadata).Materials.Count == 0,
+            && sender.CaptureTrainingCatalog(Decode).Materials.Count == 0,
             "Deleting a material retires all remaining learning descriptions and removes it from the training snapshot");
-        count += MigrationChecks(source, baselineBackup, folder);
         return count;
     }
 
-    private static int ExchangeChecks(CatalogStore sender, MaterialDraft draft, Func<string, ImageMetadata> metadata, string folder)
+    private static int ExchangeChecks(CatalogStore sender, MaterialDraft draft, string image, Func<string, ImageMetadata> metadata, string folder)
     {
         var count = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); count++; Console.WriteLine("PASS " + name); }
         void Reject(Action action, string name)
         { try { action(); } catch (CatalogStorageException) { Check(true, name); return; } throw new Exception("Expected rejection: " + name); }
-        var export = Path.Combine(folder, "with-training.exchange"); sender.ExportMaterials(export, [draft.Id]);
+        var export = Path.Combine(folder, "with-training.histosets"); sender.ExportMaterials(export, [draft.Id]);
         using var package = ExchangePackage.Open(export);
-        using (var zip = ZipFile.OpenRead(export))
-        {
-            using var stream = zip.GetEntry("manifest.json")!.Open(); var manifest = JsonNode.Parse(stream)!;
-            Check(manifest["FormatVersion"]!.GetValue<int>() == 2, "Training-aware material export explicitly writes exchange format2");
-        }
-        using var target = new CatalogStore(Path.Combine(folder, "Receiver"));
-        var preview = target.PreviewExchange(package); var result = target.ApplyExchange(preview, Choices(preview), metadata);
+        Check(CatalogStore.IsNativeCatalog(export), "Training-aware material export is a directly openable catalog");
+        var targetPath = Path.Combine(folder, "Receiver.histosets");
+        CatalogStore.CreateCatalog(targetPath, "Receiver");
+        using var target = new CatalogStore(targetPath);
+        var preview = target.PreviewExchange(package); var result = target.ApplyExchange(preview, Choices(preview));
         Check(result.Changed && PromptContent(target.LoadMaterialDraft(draft.Id)) == PromptContent(draft),
-            "Exchange format2 roundtrip preserves training variants on both material and element owners");
+            "Native exchange roundtrip preserves training variants on both material and element owners");
         var hash = Hash(target.DatabasePath);
-        preview = target.PreviewExchange(package); result = target.ApplyExchange(preview, Choices(preview), metadata);
+        preview = target.PreviewExchange(package); result = target.ApplyExchange(preview, Choices(preview));
         Check(!result.Changed && Hash(target.DatabasePath) == hash, "Repeating a training-aware exchange is a byte-exact no-op");
         var local = target.LoadMaterialDraft(draft.Id); local.TrainingPrompts[0].Texts["ru"] = "Локальное учебное описание."; target.SaveMaterialDraft(local, metadata);
         draft.TrainingPrompts[0].Texts["ru"] = "Учебное описание отправителя."; draft = sender.SaveMaterialDraft(draft, metadata);
-        var newer = Path.Combine(folder, "training-both-changed.exchange"); sender.ExportMaterials(newer, [draft.Id]);
+        var newer = Path.Combine(folder, "training-both-changed.histosets"); sender.ExportMaterials(newer, [draft.Id]);
         using var changed = ExchangePackage.Open(newer); preview = target.PreviewExchange(changed);
         Check(Material(preview, draft.Id).Status == ExchangeChangeKind.Conflict,
             "Independent edits confined to learning descriptions are detected as a material-content conflict");
-        target.ApplyExchange(preview, Choices(preview), metadata);
+        target.ApplyExchange(preview, Choices(preview));
         Check(PromptContent(target.LoadMaterialDraft(draft.Id)) == PromptContent(draft),
             "Explicit UseIncoming resolves a learning-description-only conflict with the complete reviewed graph");
-        var legacyFile = RewritePackage(newer, folder, "legacy-with-text-change", g =>
-        {
-            g.AsObject().Remove("training_prompts"); g.AsObject().Remove("training_prompt_translations");
-            g["material_translations"]!.AsArray().Single(t => t!["locale"]!.GetValue<string>() == "ru")!["summary"] = "Из старого пакета";
-        }, 1);
-        var retained = PromptRows(target.DatabasePath);
-        using (var legacy = ExchangePackage.Open(legacyFile))
-        {
-            preview = target.PreviewExchange(legacy); target.ApplyExchange(preview, Choices(preview), metadata);
-            Check(target.LoadMaterialDraft(draft.Id).Texts["ru"].Summary == "Из старого пакета" && PromptRows(target.DatabasePath) == retained,
-                "UseIncoming from legacy format1 updates its atlas fields but preserves byte-exact local learning rows for retained owners");
-        }
-        var other = Card(draft.Images[0].ManagedPath!, "Другой владелец", "Other owner");
+        var other = Card(image, "Другой владелец", "Other owner");
         other.TrainingPrompts.Add(new() { Id = draft.TrainingPrompts[0].Id, Texts = new() { ["ru"] = "UUID collision", ["en"] = "Collision" } });
-        using (var collision = new CatalogStore(Path.Combine(folder, "PromptCollision")))
+        var collisionPath = Path.Combine(folder, "PromptCollision.histosets");
+        CatalogStore.CreateCatalog(collisionPath, "Prompt collision");
+        using (var collision = new CatalogStore(collisionPath))
         {
             collision.SaveMaterialDraft(other, metadata); hash = Hash(collision.DatabasePath);
-            Reject(() => { var plan = collision.PreviewExchange(changed); collision.ApplyExchange(plan, Choices(plan), metadata); },
+            Reject(() => { var plan = collision.PreviewExchange(changed); collision.ApplyExchange(plan, Choices(plan)); },
                 "An imported training UUID cannot steal a learning description already owned by another local material");
             Check(Hash(collision.DatabasePath) == hash, "Imported training ownership collision leaves the target database byte-identical");
         }
-        var legacyDeleteElement = RewritePackage(newer, folder, "legacy-delete-element", g =>
-        {
-            g.AsObject().Remove("training_prompts"); g.AsObject().Remove("training_prompt_translations");
-            foreach (var table in new[] { "elements", "element_translations", "regions" })
-                foreach (var row in g[table]!.AsArray()) row!["deleted_utc"] = "2026-10-11T00:00:00Z";
-        }, 1);
-        using (var legacy = ExchangePackage.Open(legacyDeleteElement))
-        {
-            preview = target.PreviewExchange(legacy); target.ApplyExchange(preview, Choices(preview), metadata);
-            Check(target.LoadMaterialDraft(draft.Id).Elements.Count == 0
-                && Convert.ToInt64(Sql(target.DatabasePath, "SELECT COUNT(*) FROM training_prompts WHERE element_id IS NOT NULL AND deleted_utc IS NULL;")) == 0
-                && target.LoadMaterialDraft(draft.Id).TrainingPrompts.Count == draft.TrainingPrompts.Count,
-                "Legacy format1 element deletion retires only that owner's learning descriptions and retains material descriptions");
-        }
-        var divergedLegacyTarget = Path.Combine(folder, "LegacyBaseline");
-        using (var legacyTarget = new CatalogStore(divergedLegacyTarget))
-        {
-            preview = legacyTarget.PreviewExchange(changed); legacyTarget.ApplyExchange(preview, Choices(preview), metadata);
-            using (var oldPackage = ExchangePackage.Open(legacyFile))
-            { preview = legacyTarget.PreviewExchange(oldPackage); legacyTarget.ApplyExchange(preview, Choices(preview), metadata); }
-            var noPrompts = RewritePackage(newer, folder, "format2-after-legacy", graph =>
-            {
-                graph["training_prompts"] = new JsonArray(); graph["training_prompt_translations"] = new JsonArray();
-                graph["materials"]![0]!["revision"] = draft.Revision + 10;
-                graph["material_translations"]!.AsArray().Single(t => t!["locale"]!.GetValue<string>() == "ru")!["summary"] = "Новая правка без учебных описаний";
-            }, 2);
-            using var next = ExchangePackage.Open(noPrompts); preview = legacyTarget.PreviewExchange(next);
-            Check(Material(preview, draft.Id).Status == ExchangeChangeKind.Conflict,
-                "A newer format2 package cannot automatically erase local descriptions previously preserved across format1 exchange");
-        }
-        // A format2 sender intentionally omitting active variants is authoritative for that graph.
         draft.TrainingPrompts.Clear(); draft.Elements[0].TrainingPrompts.Clear(); draft = sender.SaveMaterialDraft(draft, metadata);
-        var removed = Path.Combine(folder, "removed-training.exchange"); sender.ExportMaterials(removed, [draft.Id]);
+        var removed = Path.Combine(folder, "removed-training.histosets"); sender.ExportMaterials(removed, [draft.Id]);
         using (var removePackage = ExchangePackage.Open(removed))
         {
-            preview = target.PreviewExchange(removePackage); target.ApplyExchange(preview, Choices(preview), metadata);
+            preview = target.PreviewExchange(removePackage); target.ApplyExchange(preview, Choices(preview));
             Check(target.LoadMaterialDraft(draft.Id).TrainingPrompts.Count == 0 && target.LoadMaterialDraft(draft.Id).Elements[0].TrainingPrompts.Count == 0,
-                "Explicit format2 replacement applies learning-description deletions without treating them as absent legacy capability");
+                "Explicit replacement applies learning-description deletions");
         }
         var localBeforeDeletion = target.LoadMaterialDraft(draft.Id);
         localBeforeDeletion.TrainingPrompts.Add(Prompt("Только у получателя", "Receiver-only learning description"));
         target.SaveMaterialDraft(localBeforeDeletion, metadata);
-        var legacyDeleteRoot = RewritePackage(removed, folder, "legacy-delete-material", graph =>
+        var sourceCopy = Path.Combine(folder, "BeforeDeletion.histosets");
+        sender.CreateBackup(sourceCopy);
+        using var deletionSource = new CatalogStore(sourceCopy);
+        deletionSource.DeleteMaterial(draft.Id, draft.Revision);
+        var deleted = Path.Combine(folder, "deleted-training.histosets");
+        deletionSource.ExportMaterials(deleted, [draft.Id]);
+        using (var deletion = ExchangePackage.Open(deleted))
         {
-            graph.AsObject().Remove("training_prompts"); graph.AsObject().Remove("training_prompt_translations");
-            foreach (var table in new[] { "materials", "material_translations", "material_images", "elements", "element_translations", "regions", "image_calibrations", "material_tags" })
-                foreach (var row in graph[table]!.AsArray()) row!["deleted_utc"] = "2026-10-11T00:00:00Z";
-        }, 1);
-        using (var legacy = ExchangePackage.Open(legacyDeleteRoot))
-        {
-            preview = target.PreviewExchange(legacy);
+            preview = target.PreviewExchange(deletion);
             Check(Material(preview, draft.Id).Status == ExchangeChangeKind.Deletion,
-                "Legacy whole-card deletion is presented as an explicit deletion decision");
-            target.ApplyExchange(preview, Choices(preview), metadata);
+                "Whole-card deletion is presented as an explicit deletion decision");
+            target.ApplyExchange(preview, Choices(preview));
             Check(target.LoadMaterialIndex().Count == 0
-                && Convert.ToInt64(Sql(target.DatabasePath, "SELECT COUNT(*) FROM training_prompts WHERE deleted_utc IS NULL;")) == 0
-                && Convert.ToInt64(Sql(target.DatabasePath, "SELECT COUNT(*) FROM training_prompt_translations WHERE deleted_utc IS NULL;")) == 0,
-                "Accepted legacy whole-card deletion retires receiver-only learning descriptions with their owner");
+                && Convert.ToInt64(Sql(target.DatabasePath, "SELECT COUNT(*) FROM training_prompts WHERE deleted_utc IS NULL;")) == 0,
+                "Accepted deletion retires receiver-only learning descriptions with their owner");
         }
         return count;
-    }
-
-    private static int MigrationChecks(string source, string baselineBackup, string folder)
-    {
-        var root = Path.Combine(folder, "ActualSchema5"); CatalogStore.RestoreBackup(baselineBackup, root); var db = Path.Combine(root, "catalog.sqlite");
-        Sql(db, "DROP TABLE training_prompt_translations; DROP TABLE training_prompts; DROP TABLE exchange_baselines;"
-            + File.ReadAllText(Path.Combine(source, "src", "HistOSets.Storage", "Migrations", "005_catalog_exchange.sql"))
-            + "DELETE FROM schema_migrations WHERE version>5; PRAGMA user_version=5;");
-        var oldRows = ExistingRows(db); var hash = Hash(db); string before;
-        using (var migrated = new CatalogStore(root))
-        {
-            if (migrated.GetMetadata().FormatVersion != 6 || ExistingRows(db) != oldRows
-                || Convert.ToInt64(Sql(db, "SELECT COUNT(*) FROM training_prompts;")) != 0 || Convert.ToInt64(Sql(db, "SELECT COUNT(*) FROM schema_migrations;")) != 6)
-                throw new Exception("Actual schema5 migration changed original rows or invented prompts");
-            before = migrated.LastMigrationBackupPath ?? throw new Exception("No schema6 backup");
-            if (!Path.GetFileName(before).StartsWith("before-schema6-")) throw new Exception("Wrong schema6 backup name");
-        }
-        Console.WriteLine("PASS Actual schema5 migrates to schema6 once with exact original business rows and no invented learning descriptions");
-        var restored = Path.Combine(folder, "OriginalSchema5"); CatalogStore.RestoreBackup(before, restored); var restoredDb = Path.Combine(restored, "catalog.sqlite");
-        if (Convert.ToInt64(Sql(restoredDb, "PRAGMA user_version;")) != 5 || ExistingRows(restoredDb) != oldRows)
-            throw new Exception("Pre-schema6 backup failed to restore actual schema5 data");
-        Console.WriteLine("PASS Pre-schema6 recovery archive restores actual schema5 and all original records and files");
-        Sql(restoredDb, "CREATE TRIGGER fail_schema6 BEFORE INSERT ON schema_migrations WHEN NEW.version=6 BEGIN SELECT RAISE(ABORT,'schema6 failure'); END;");
-        hash = Hash(restoredDb);
-        try { using var failed = new CatalogStore(restored); throw new Exception("Schema6 failure was not reported"); } catch (CatalogStorageException) { }
-        if (Hash(restoredDb) != hash || Convert.ToInt64(Sql(restoredDb, "PRAGMA user_version;")) != 5
-            || Convert.ToInt64(Sql(restoredDb, "SELECT COUNT(*) FROM sqlite_master WHERE name IN('training_prompts','training_prompt_translations');")) != 0)
-            throw new Exception("Schema6 migration failure did not roll back new DDL and metadata");
-        Console.WriteLine("PASS Failed schema6 migration rolls back both new tables and preserves original database bytes");
-        return 3;
     }
 
     private static MaterialDraft Card(string image, string ru, string en)
@@ -294,32 +220,8 @@ internal static class TrainingStorageChecks
     }
     private static TrainingPromptDraft Prompt(string ru, string en, bool enabled = true) => new() { IsEnabled = enabled, Texts = new() { ["ru"] = ru, ["en"] = en } };
     private static string PromptContent(MaterialDraft draft) => JsonSerializer.Serialize(new { draft.TrainingPrompts, Elements = draft.Elements.Select(e => new { e.Id, e.TrainingPrompts }) });
-    private static string PromptRows(string db) => JsonSerializer.Serialize(new[] { Snapshot(db, "training_prompts"), Snapshot(db, "training_prompt_translations") });
-    private static string ExistingRows(string db) => JsonSerializer.Serialize(new[] { "images", "materials", "material_translations", "material_images", "elements", "element_translations", "regions", "image_calibrations", "tag_groups", "tag_group_translations", "tags", "tag_translations", "material_tags", "analog_groups", "analog_group_translations", "import_batches", "exchange_baselines" }.Select(t => Snapshot(db, t)));
-    private static string Snapshot(string db, string table)
-    {
-        using var connection = Open(db); using var command = connection.CreateCommand(); command.CommandText = "SELECT * FROM " + table + (table == "exchange_baselines" ? " ORDER BY source_catalog_id,entity_kind,entity_id;" : " ORDER BY id;");
-        using var reader = command.ExecuteReader(); var rows = new List<object?[]>();
-        while (reader.Read()) rows.Add(Enumerable.Range(0, reader.FieldCount).Select(i => reader.IsDBNull(i) ? null : reader.GetValue(i)).ToArray());
-        return JsonSerializer.Serialize(rows);
-    }
     private static ExchangePreviewItem Material(ExchangePreview preview, Guid id) => preview.Items.Single(i => i.Kind == ExchangeEntityKind.Material && i.Id == id);
     private static Dictionary<string, ExchangeResolution> Choices(ExchangePreview preview) => preview.Items.ToDictionary(i => i.Key, i => i.Status == ExchangeChangeKind.Unchanged ? ExchangeResolution.KeepLocal : ExchangeResolution.UseIncoming);
-    private static string RewritePackage(string source, string folder, string name, Action<JsonNode> mutate, int format)
-    {
-        var path = Path.Combine(folder, name + ".exchange"); using var input = ZipFile.OpenRead(source); using var output = ZipFile.Open(path, ZipArchiveMode.Create);
-        JsonNode manifest, graph;
-        using (var stream = input.GetEntry("manifest.json")!.Open()) manifest = JsonNode.Parse(stream)!;
-        using (var stream = input.GetEntry("graph.json")!.Open()) graph = JsonNode.Parse(stream)!;
-        mutate(graph); manifest["FormatVersion"] = format; var bytes = JsonSerializer.SerializeToUtf8Bytes(graph);
-        var record = manifest["Files"]!.AsArray().Single(f => f!["Path"]!.GetValue<string>() == "graph.json")!;
-        record["Sha256"] = Convert.ToHexStringLower(SHA256.HashData(bytes)); record["Size"] = bytes.Length;
-        using (var stream = output.CreateEntry("graph.json").Open()) stream.Write(bytes);
-        using (var stream = output.CreateEntry("manifest.json").Open()) JsonSerializer.Serialize(stream, manifest);
-        foreach (var entry in input.Entries.Where(e => e.FullName.StartsWith("SPECIMENS/")))
-        { using var from = entry.Open(); using var to = output.CreateEntry(entry.FullName).Open(); from.CopyTo(to); }
-        return path;
-    }
     private static SqliteConnection Open(string db)
     { var c = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = db, ForeignKeys = true, Pooling = false }.ToString()); c.Open(); return c; }
     private static object? Sql(string db, string sql, params (string Name, object? Value)[] parameters)

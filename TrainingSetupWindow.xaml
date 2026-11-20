@@ -1,6 +1,7 @@
-<Window x:Class="HistOSets.TrainingSetupWindow"
+<fit:WorkAreaWindow x:Class="HistOSets.TrainingSetupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:fit="clr-namespace:HistOSets.Controls"
         Width="1080" Height="850" MinWidth="640" MinHeight="520"
         Background="{StaticResource BrandBackgroundBrush}" FontFamily="Segoe UI" FontSize="14"
         WindowStartupLocation="CenterOwner">
@@ -115,4 +116,4 @@
             </WrapPanel>
         </StackPanel>
     </Grid>
-</Window>
+</fit:WorkAreaWindow>

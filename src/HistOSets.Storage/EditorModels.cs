@@ -40,11 +40,11 @@ public sealed class MaterialImageDraft
     public Guid? ImageId { get; set; }
     public string? SourcePath { get; set; }
     public string? SourceSha256 { get; set; }
-    public string? ManagedPath { get; set; }
+    public string? Sha256 { get; init; }
     public ImageMetadata? Metadata { get; set; }
     public bool IsPrimary { get; set; }
     public ImageCalibration? Calibration { get; set; }
-    public MaterialImageDraft Clone() => new() { Id = Id, ImageId = ImageId, SourcePath = SourcePath, SourceSha256 = SourceSha256, ManagedPath = ManagedPath, Metadata = Metadata, IsPrimary = IsPrimary, Calibration = Calibration };
+    public MaterialImageDraft Clone() => new() { Id = Id, ImageId = ImageId, SourcePath = SourcePath, SourceSha256 = SourceSha256, Sha256 = Sha256, Metadata = Metadata, IsPrimary = IsPrimary, Calibration = Calibration };
 }
 
 public sealed class MaterialElementDraft
@@ -75,5 +75,5 @@ public sealed class MaterialRegionDraft
 }
 
 public sealed record MaterialIndexEntry(Guid Id, int Revision, string Status, string Name, string Summary,
-    string? ImagePath, Guid? AnalogGroupId, IReadOnlyDictionary<string, string> Names,
+    Guid? ImageId, Guid? AnalogGroupId, IReadOnlyDictionary<string, string> Names,
     IReadOnlyDictionary<string, string> AnalogGroupNames, IReadOnlySet<Guid> TagIds);

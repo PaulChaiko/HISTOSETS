@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using System.Security.Cryptography;
 using HistOSets.Core;
 using HistOSets.Storage;
@@ -6,7 +5,7 @@ using Microsoft.Data.Sqlite;
 
 internal static class EditorChecks
 {
-    internal static int Run(string source,string backup,string temp,Func<string,ImageMetadata> metadata)
+    internal static int Run(string source,string temp,Func<string,ImageMetadata> metadata)
     {
         var count=0;
         void Check(bool value,string name) { if(!value) throw new Exception(name); count++; Console.WriteLine("PASS "+name); }
@@ -15,25 +14,30 @@ internal static class EditorChecks
             try { action(); } catch(CatalogStorageException) { Check(true,name); return; }
             throw new Exception("Expected CatalogStorageException: "+name);
         }
-        var original=AtlasLoader.Load(source);
-        var root=Path.Combine(temp,"EditorCatalog");
+        var originals=Directory.EnumerateFiles(Path.Combine(source,"SPECIMENS"),"*.jpg",SearchOption.AllDirectories)
+            .Order(StringComparer.Ordinal).Take(2).ToArray();
+        var original=originals[0];
+        var differentOriginal=originals[1];
+        var expectedImageHash=Hash(original);
+        var catalog=Path.Combine(temp,"EditorCatalog.histosets");
+        CatalogStore.CreateCatalog(catalog,"Editor");
         var copy=Path.Combine(temp,"editor.histosets");
         Guid materialId;
-        using(var store=new CatalogStore(root))
+        using(var store=new CatalogStore(catalog))
         {
             var initialHash=Hash(store.DatabasePath);
             var abandoned=new MaterialDraft();
             abandoned.Texts["ru"].Name="Unsaved";
-            abandoned.Images.Add(new() { SourcePath=original.Specimens[0].ImagePath,SourceSha256=Hash(original.Specimens[0].ImagePath),IsPrimary=true });
+            abandoned.Images.Add(new() { SourcePath=original,SourceSha256=Hash(original),IsPrimary=true });
             var workingCopy=abandoned.Clone(); workingCopy.Texts["ru"].Name="Changed clone";
-            Check(abandoned.Texts["ru"].Name=="Unsaved" && Hash(store.DatabasePath)==initialHash && !Directory.Exists(Path.Combine(root,"SPECIMENS")),"Canceled editor copies change neither database nor managed files");
+            Check(abandoned.Texts["ru"].Name=="Unsaved" && Hash(store.DatabasePath)==initialHash && ActiveContents(store.DatabasePath)==0,"Canceled editor copies add neither catalog changes nor image bytes");
             var empty=store.SaveMaterialDraft(new MaterialDraft(),metadata);
-            Check(empty.Revision==1 && store.LoadMaterialIndex("en").Single().Name=="Untitled" && store.LoadMaterialIndex().Single().ImagePath is null,"Blank draft without an image or useful title persists and remains in the editor index");
+            Check(empty.Revision==1 && store.LoadMaterialIndex("en").Single().Name=="Untitled" && store.LoadMaterialIndex().Single().ImageId is null,"Blank draft without an image or useful title persists and remains in the editor index");
             var draft=new MaterialDraft { Status="ready" };
             draft.Texts["ru"]=new() { Name="Объект",Summary="Кратко",Description="Подробно" };
             draft.Texts["en"]=new() { Name="Object",Summary="Summary",Description="Description" };
             draft.Texts["und"]=new() { Name="Legacy",Summary="Legacy summary",Description="Legacy details" };
-            var image=new MaterialImageDraft { SourcePath=original.Specimens[0].ImagePath,SourceSha256=Hash(original.Specimens[0].ImagePath),IsPrimary=true };
+            var image=new MaterialImageDraft { SourcePath=original,SourceSha256=Hash(original),IsPrimary=true };
             draft.Images.Add(image);
             var element=new MaterialElementDraft();
             element.Texts["ru"]=new() { Name="Элемент",Summary="Краткое описание",Description="Полное описание" };
@@ -50,13 +54,20 @@ internal static class EditorChecks
             materialId=saved.Id;
             Check(saved.Id==draft.Id && saved.Elements[0].Id==element.Id && saved.Elements[0].Regions.Select(r=>r.Id).SequenceEqual(element.Regions.Select(r=>r.Id)) && saved.Revision==1,
                 "Whole material graph keeps stable object, element and region UUIDs on first save");
-            Check(draft.Revision==0 && draft.Images[0].SourcePath is not null && saved.Images[0].SourcePath is null && File.Exists(saved.Images[0].ManagedPath),"Save returns a fresh managed working copy and does not mutate the editor's source draft");
+            Check(draft.Revision==0 && draft.Images[0].SourcePath is not null && saved.Images[0].SourcePath is null
+                && saved.Images[0].Sha256==expectedImageHash && ImageHash(store,saved.Images[0].ImageId)==expectedImageHash,
+                "Save returns a fresh working copy with its original embedded and does not mutate the editor's source draft");
             Check(saved.Status=="ready" && saved.Texts["und"].Description=="Legacy details" && saved.TagIds.Contains(tag) && saved.AnalogGroupId==draft.AnalogGroupId,
                 "Whole-graph transaction persists readiness, extra locales, staged tags and analog membership");
             Check(saved.Elements[0].Regions.Select(r=>RegionGeometryCodec.Serialize(r.Geometry)).SequenceEqual(element.Regions.Select(r=>RegionGeometryCodec.Serialize(r.Geometry))),
                 "Polygon, rectangle and ellipse parameters round-trip exactly through canonical JSON");
             Check(Convert.ToInt64(Sql(store.DatabasePath,"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='region_points';"))==0,
-                "Schema6 has one authoritative geometry representation and no region_points table");
+                "The native catalog has one authoritative geometry representation and no region_points table");
+            var withTwoImages=saved.Clone();
+            withTwoImages.Images.Add(new() { SourcePath=differentOriginal,SourceSha256=Hash(differentOriginal) });
+            Reject(()=>store.SaveMaterialDraft(withTwoImages,metadata),"A card cannot save a second image");
+            Check(ActiveContents(store.DatabasePath)==1 && store.LoadMaterialDraft(saved.Id).Images.Count==1,
+                "Rejected multi-image edits preserve the first image and introduce no image bytes");
             var noOpHash=Hash(store.DatabasePath); var revision=store.GetMetadata().ContentRevision;
             var same=store.SaveMaterialDraft(saved.Clone(),_=>throw new Exception("Existing image must not be decoded again"));
             Check(same.Revision==saved.Revision && store.GetMetadata().ContentRevision==revision && Hash(store.DatabasePath)==noOpHash,
@@ -64,7 +75,7 @@ internal static class EditorChecks
             var edited=saved.Clone(); edited.Elements[0].Texts["en"].Description="Changed details";
             edited.Elements[0].Regions[2].Geometry=RegionGeometry.Ellipse(120.5,150.75,40.125,25.875);
             var updated=store.SaveMaterialDraft(edited,metadata);
-            Check(updated.Revision==saved.Revision+1 && updated.Elements[0].Texts["en"].Description=="Changed details" && Hash(updated.Images[0].ManagedPath!)==Hash(original.Specimens[0].ImagePath),
+            Check(updated.Revision==saved.Revision+1 && updated.Elements[0].Texts["en"].Description=="Changed details" && ImageHash(store,updated.Images[0].ImageId)==expectedImageHash,
                 "Editing a child updates the material revision once while original image bytes remain unchanged");
             var stableHash=Hash(store.DatabasePath);
             Reject(()=>store.SaveMaterialDraft(saved,metadata),"Stale editor save cannot overwrite a newer material revision");
@@ -83,71 +94,62 @@ internal static class EditorChecks
             Check(updated.Status=="draft" && updated.Texts["en"].Summary=="","Incomplete content can be deliberately saved as draft");
             var cross=updated.Clone(); cross.Elements[0].Regions[0].MaterialImageId=Guid.NewGuid();
             Reject(()=>store.SaveMaterialDraft(cross,metadata),"Region cannot refer to an image absent from the same working graph");
-            var sourceChanged=Path.Combine(temp,"ChangedAfterPreview.jpg"); File.Copy(original.Specimens[0].ImagePath,sourceChanged);
+            var sourceChanged=Path.Combine(temp,"ChangedAfterPreview.jpg"); File.Copy(original,sourceChanged);
             var changedDraft=new MaterialDraft(); changedDraft.Images.Add(new() { SourcePath=sourceChanged,SourceSha256=Hash(sourceChanged),IsPrimary=true });
-            File.WriteAllBytes(sourceChanged,File.ReadAllBytes(original.Specimens[1].ImagePath));
+            File.WriteAllBytes(sourceChanged,File.ReadAllBytes(differentOriginal));
             var countBefore=store.GetStatistics().Materials;
             Reject(()=>store.SaveMaterialDraft(changedDraft,metadata),"A source file changed after preview cannot receive contours for different bytes");
             Check(store.GetStatistics().Materials==countBefore,"Changed-source rejection creates no partial material");
+            var newWithRegion=new MaterialDraft();
+            var desiredImage=new MaterialImageDraft { SourcePath=differentOriginal,SourceSha256=Hash(differentOriginal),IsPrimary=true };
+            newWithRegion.Images.Add(desiredImage);
+            var newElement=new MaterialElementDraft();
+            newElement.Regions.Add(new() { MaterialImageId=desiredImage.Id,Geometry=RegionGeometry.Rectangle(1,2,3,4) });
+            newWithRegion.Elements.Add(newElement);
+            Sql(store.DatabasePath,"CREATE TRIGGER fail_new_region BEFORE INSERT ON regions BEGIN SELECT RAISE(ABORT,'fail after image blob insertion'); END;");
+            var originalContentCount=ActiveContents(store.DatabasePath);
+            Reject(()=>store.SaveMaterialDraft(newWithRegion,metadata),"A failure after inserting the original rolls back the new card");
+            Check(ActiveContents(store.DatabasePath)==originalContentCount && !store.LoadMaterialIndex().Any(m=>m.Id==newWithRegion.Id),
+                "The image payload and the material graph share the same transaction");
+            Sql(store.DatabasePath,"DROP TRIGGER fail_new_region;");
             store.CreateBackup(copy);
 
             var imageLink=updated.Images[0].Id;
             var removed=updated.Clone(); removed.Images.Clear(); foreach(var e in removed.Elements) e.Regions.Clear();
             removed=store.SaveMaterialDraft(removed,metadata);
             Check(removed.Images.Count==0 && removed.Elements[0].Regions.Count==0,"Explicit image and region removal persists as tombstones");
-            var readded=removed.Clone(); var newImage=new MaterialImageDraft { SourcePath=original.Specimens[0].ImagePath,SourceSha256=Hash(original.Specimens[0].ImagePath),IsPrimary=true };
+            var readded=removed.Clone(); var newImage=new MaterialImageDraft { SourcePath=original,SourceSha256=Hash(original),IsPrimary=true };
             readded.Images.Add(newImage); readded.Elements[0].Regions.Add(new() { MaterialImageId=newImage.Id,Geometry=RegionGeometry.Rectangle(1,2,3,4) });
             readded=store.SaveMaterialDraft(readded,metadata);
             Check(readded.Images[0].Id==imageLink && readded.Elements[0].Regions[0].MaterialImageId==imageLink,"Re-adding a removed original revives its stable association UUID and remaps new contours");
 
             var shared=new MaterialDraft(); shared.Images.Add(new() { ImageId=readded.Images[0].ImageId,IsPrimary=true });
             shared=store.SaveMaterialDraft(shared,metadata);
-            var imagePath=shared.Images[0].ManagedPath!;
+            var sharedImageId=shared.Images[0].ImageId;
             store.DeleteMaterial(readded.Id,readded.Revision);
-            Check(!store.LoadMaterialIndex().Any(m=>m.Id==readded.Id) && File.Exists(imagePath) && store.LoadMaterialDraft(shared.Id).Images.Count==1,
+            Check(!store.LoadMaterialIndex().Any(m=>m.Id==readded.Id) && ImageHash(store,sharedImageId)==expectedImageHash && store.LoadMaterialDraft(shared.Id).Images.Count==1,
                 "Deleting a material soft-deletes its graph and preserves a shared original and its other material");
             Check(Convert.ToInt64(Sql(store.DatabasePath,"SELECT COUNT(*) FROM regions WHERE material_id=$id AND deleted_utc IS NULL;",("$id",readded.Id.ToString())))==0 &&
                 Convert.ToInt64(Sql(store.DatabasePath,"SELECT COUNT(*) FROM elements WHERE material_id=$id AND deleted_utc IS NULL;",("$id",readded.Id.ToString())))==0,
                 "Material deletion cascades active elements and regions to deletion markers");
         }
-        var restored=Path.Combine(temp,"EditorRestored"); CatalogStore.RestoreBackup(copy,restored);
+        var restored=Path.Combine(temp,"EditorRestored.histosets"); CatalogStore.CopyCatalog(copy,restored);
         using(var store=new CatalogStore(restored))
         {
             var draft=store.LoadMaterialDraft(materialId);
-            Check(draft.Elements[0].Regions.Count==3 && draft.Elements[0].Regions[2].Geometry.Kind=="ellipse" && draft.Texts["und"].Name=="Legacy",
-                "Schema6 backup restores editable typed geometry and all language records");
+            Check(draft.Elements[0].Regions.Count==3 && draft.Elements[0].Regions[2].Geometry.Kind=="ellipse" && draft.Texts["und"].Name=="Legacy"
+                && ImageHash(store,draft.Images[0].ImageId)==expectedImageHash,
+                "A single-file catalog copy preserves original bytes, editable typed geometry and all language records");
         }
 
-        var oldTwo=FoundationChecks.MakeSchema1(source,backup,Path.Combine(temp,"ActualSchema2"));
-        var db=Path.Combine(oldTwo,"catalog.sqlite");
-        Sql(db,File.ReadAllText(Path.Combine(source,"src","HistOSets.Storage","Migrations","002_catalog_foundation.sql")));
-        var seed=Path.Combine(temp,"schema2-reference.sqlite");
-        using(var archive=ZipFile.OpenRead(backup)) archive.GetEntry("catalog.sqlite")!.ExtractToFile(seed);
-        Sql(db,"""
-            ATTACH DATABASE $source AS seed;
-            INSERT INTO tag_groups SELECT * FROM seed.tag_groups;
-            INSERT INTO tag_group_translations SELECT * FROM seed.tag_group_translations;
-            """,("$source",seed));
-        File.Delete(seed);
-        Sql(db,"""
-            UPDATE catalog_metadata SET name='Actual old catalog',content_revision=17;
-            UPDATE material_images SET is_primary=1;
-            INSERT INTO schema_migrations VALUES(2,'2026-10-01T00:00:00+00:00'); PRAGMA user_version=2;
-            """);
-        var oldPoint=Convert.ToDouble(Sql(db,"SELECT x FROM region_points WHERE x>1968 LIMIT 1;"));
-        using(var store=new CatalogStore(oldTwo))
-        {
-            Check(store.GetMetadata().FormatVersion==6 && store.GetMetadata().Name=="Actual old catalog" && store.GetMetadata().ContentRevision==17,
-                "Real schema2 upgrades to schema6 without changing catalog name or content revision");
-            Check(store.Load().Specimens.SelectMany(s=>s.Elements).SelectMany(e=>e.Polygons).SelectMany(p=>p.Points).Any(p=>p.X==oldPoint),
-                "Schema2-to-6 migration retains an original out-of-image vertex exactly");
-            var oldBackup=store.LastMigrationBackupPath!;
-            var originalTwo=Path.Combine(temp,"RestoreActualSchema2"); CatalogStore.RestoreBackup(oldBackup,originalTwo);
-            Check(Convert.ToInt64(Sql(Path.Combine(originalTwo,"catalog.sqlite"),"PRAGMA user_version;"))==2 &&
-                Convert.ToInt64(Sql(Path.Combine(originalTwo,"catalog.sqlite"),"SELECT COUNT(*) FROM region_points;"))>0,
-                "Automatic pre-JSON backup retains actual schema2 and its complete point table");
-        }
         return count;
+    }
+
+    private static long ActiveContents(string path) => (long)Sql(path,"SELECT COUNT(*) FROM image_contents;")!;
+    private static string ImageHash(CatalogStore store,Guid? imageId)
+    {
+        using var image=store.OpenImage(imageId!.Value);
+        return Convert.ToHexStringLower(SHA256.HashData(image));
     }
 
     private static object? Sql(string db,string sql,params (string Name,object? Value)[] parameters)

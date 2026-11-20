@@ -18,7 +18,7 @@ public sealed partial class CatalogStore
             var rows = new List<MaterialIndexEntry>();
             using var command = Command(connection, """
                 SELECT m.id,m.revision,m.status,m.analog_group_id,
-                    (SELECT i.storage_key FROM material_images mi JOIN images i ON i.id=mi.image_id AND i.deleted_utc IS NULL
+                    (SELECT i.id FROM material_images mi JOIN images i ON i.id=mi.image_id AND i.deleted_utc IS NULL
                      WHERE mi.material_id=m.id AND mi.deleted_utc IS NULL ORDER BY mi.is_primary DESC,mi.sort_order,mi.id LIMIT 1)
                 FROM materials m WHERE m.deleted_utc IS NULL ORDER BY m.created_utc,m.id;
                 """);
@@ -34,7 +34,7 @@ public sealed partial class CatalogStore
                 var analog = reader.IsDBNull(3) ? null : reader.GetString(3);
                 var guid = Guid.Parse(id);
                 rows.Add(new(guid, reader.GetInt32(1), reader.GetString(2), name, selected?.Summary ?? "",
-                    reader.IsDBNull(4) ? null : StorageFiles.Resolve(RootDirectory, reader.GetString(4)),
+                    reader.IsDBNull(4) ? null : Guid.Parse(reader.GetString(4)),
                     analog is null ? null : Guid.Parse(analog), localized,
                     analog is null ? new Dictionary<string,string>() : analogs.GetValueOrDefault(analog) ?? new(),
                     taxonomy.MaterialTags.GetValueOrDefault(guid) ?? new HashSet<Guid>()));
@@ -67,14 +67,14 @@ public sealed partial class CatalogStore
         result.Texts = ReadEditorTexts(connection, "material_translations", "material_id", key, transaction);
         result.TrainingPrompts = ReadEditorPrompts(connection, materialId, null, transaction);
         using (var command = Command(connection, """
-            SELECT mi.id,i.id,i.storage_key,i.pixel_width,i.pixel_height,i.dpi_x,i.dpi_y,i.mime_type,i.orientation,mi.is_primary
+            SELECT mi.id,i.id,i.sha256,i.pixel_width,i.pixel_height,i.dpi_x,i.dpi_y,i.mime_type,i.orientation,mi.is_primary
             FROM material_images mi JOIN images i ON i.id=mi.image_id AND i.deleted_utc IS NULL
             WHERE mi.material_id=$id AND mi.deleted_utc IS NULL ORDER BY mi.sort_order,mi.id;
             """, transaction, ("$id", key)))
         using (var reader = command.ExecuteReader())
             while (reader.Read()) result.Images.Add(new()
             {
-                Id = Guid.Parse(reader.GetString(0)), ImageId = Guid.Parse(reader.GetString(1)), ManagedPath = StorageFiles.Resolve(RootDirectory,reader.GetString(2)),
+                Id = Guid.Parse(reader.GetString(0)), ImageId = Guid.Parse(reader.GetString(1)), Sha256 = reader.GetString(2),
                 Metadata = new(reader.GetInt32(3),reader.GetInt32(4),reader.GetDouble(5),reader.GetDouble(6),reader.GetString(7),reader.GetInt32(8)), IsPrimary = reader.GetBoolean(9),
                 Calibration = ReadCalibration(connection, Guid.Parse(reader.GetString(0)), transaction)
             });
@@ -115,8 +115,7 @@ public sealed partial class CatalogStore
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            var stage = Path.Combine(RootDirectory,".editor-" + Guid.NewGuid().ToString("N"));
-            var installed = new List<string>();
+            var stage = Path.Combine(Path.GetTempPath(),"histosets-editor-" + Guid.NewGuid().ToString("N"));
             var committed = false;
             try
             {
@@ -172,17 +171,6 @@ public sealed partial class CatalogStore
                     assets.Add(image.Id,asset);
                     foreach(var region in draft.Elements.SelectMany(e=>e.Regions).Where(r=>r.MaterialImageId==previousId)) region.MaterialImageId=image.Id;
                 }
-                foreach (var asset in assets.Values)
-                {
-                    var destination = StorageFiles.Resolve(RootDirectory,asset.Key);
-                    if (asset.StagedPath is not null && !File.Exists(destination))
-                    {
-                        Install(asset.StagedPath,asset.Key,asset.Hash);
-                        installed.Add(destination);
-                    }
-                    if (!File.Exists(destination) || new FileInfo(destination).Length!=asset.Size || StorageFiles.Hash(destination)!=asset.Hash)
-                        throw new CatalogStorageException("Изображение отсутствует или изменено: " + asset.Key);
-                }
                 using (var transaction = connection.BeginTransaction())
                 {
                     CheckExpectedRevision(connection,transaction,draft.Id,draft.Revision);
@@ -195,10 +183,7 @@ public sealed partial class CatalogStore
                         [("kind",draft.Kind),("status",draft.Status),("author_credit",draft.AuthorCredit),("rights_credit",draft.RightsCredit),("analog_group_id",draft.AnalogGroupId?.ToString())],touch:false);
                     SaveEditorTexts(connection,transaction,"material_translations","material_id",draft.Id,draft.Texts,now,origin);
                     SaveEditorPrompts(connection,transaction,draft.Id,null,draft.TrainingPrompts,now,origin);
-                    var primary = draft.Images.SingleOrDefault(i=>i.IsPrimary)?.Id.ToString();
-                    var previousPrimary = Scalar(connection,"SELECT id FROM material_images WHERE material_id=$id AND is_primary=1 AND deleted_utc IS NULL;",transaction,("$id",draft.Id.ToString())) as string;
-                    if (previousPrimary is not null && previousPrimary!=primary)
-                        Execute(connection,"UPDATE material_images SET is_primary=0,revision=revision+1,modified_utc=$now WHERE id=$id;",transaction,("$id",previousPrimary),("$now",now));
+                    RemoveMissingRows(connection,transaction,"material_images","material_id",draft.Id,draft.Images.Select(i=>i.Id).ToHashSet(),now);
                     for(var i=0;i<draft.Images.Count;i++)
                     {
                         var image = draft.Images[i]; var asset = assets[image.Id];
@@ -208,6 +193,17 @@ public sealed partial class CatalogStore
                         SaveEditorRow(connection,transaction,"images",asset.ImageId,now,origin,
                             [("storage_key",asset.Key),("sha256",asset.Hash),("byte_size",asset.Size),("pixel_width",asset.Metadata.Width),("pixel_height",asset.Metadata.Height),
                             ("dpi_x",asset.Metadata.DpiX),("dpi_y",asset.Metadata.DpiY),("mime_type",asset.Metadata.MimeType),("orientation",asset.Metadata.Orientation)]);
+                        if (asset.StagedPath is not null)
+                        {
+                            using var original = File.OpenRead(asset.StagedPath);
+                            WriteImageContent(connection,transaction,asset.ImageId.ToString(),original,asset.Size,asset.Hash);
+                        }
+                        else
+                        {
+                            using var original = ReadImageContent(connection,transaction,asset.ImageId.ToString());
+                            if (original.Length != asset.Size)
+                                throw new CatalogStorageException("Оригинал изображения отсутствует или повреждён.");
+                        }
                         RequireOwner(connection,transaction,"material_images",image.Id,"material_id",draft.Id);
                         SaveEditorRow(connection,transaction,"material_images",image.Id,now,origin,
                             [("material_id",draft.Id.ToString()),("image_id",asset.ImageId.ToString()),("sort_order",i),("is_primary",image.IsPrimary?1:0)]);
@@ -270,9 +266,7 @@ public sealed partial class CatalogStore
                 // Cleanup cannot turn a committed save into a reported rollback or hide the original error.
                 try { if(Directory.Exists(stage)) Directory.Delete(stage,true); }
                 catch(Exception ex) when(ex is IOException or UnauthorizedAccessException) { }
-                if(!committed) foreach(var path in installed)
-                    try { if(File.Exists(path)) File.Delete(path); }
-                    catch(Exception ex) when(ex is IOException or UnauthorizedAccessException) { }
+
             }
         }
     }
@@ -292,7 +286,8 @@ public sealed partial class CatalogStore
             foreach(var (locale,text) in prompt.Texts)
                 if(string.IsNullOrWhiteSpace(locale) || text is null)
                     throw new CatalogStorageException("Некорректная языковая запись учебного описания.");
-        if(draft.Images.Count(i=>i.IsPrimary)>1) throw new CatalogStorageException("У объекта может быть только одно основное изображение.");
+        if(draft.Images.Count>1) throw new CatalogStorageException("У объекта может быть только одно изображение.");
+        if(draft.Images.Count==1) draft.Images[0].IsPrimary=true;
         foreach(var image in draft.Images)
             if(image.Calibration is { } calibration)
             {
